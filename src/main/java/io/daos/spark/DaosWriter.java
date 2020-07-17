@@ -189,7 +189,7 @@ public class DaosWriter {
               mapId,
               IODataDesc.IodType.ARRAY,
               1,
-              0,
+                  totalSize,
               buf
               ));
         } catch (IOException e) {

@@ -29,6 +29,8 @@ import org.apache.spark.unsafe.array.ByteArrayMethods
 
 package object daos {
 
+  val SHUFFLE_DAOS_APP_ID = "spark.shuffle.daos.app.id"
+
   val SHUFFLE_DAOS_POOL_UUID =
     ConfigBuilder("spark.shuffle.daos.pool.uuid")
       .version("3.0.0")
@@ -87,14 +89,14 @@ package object daos {
         s"The percentage must be no less than 0.5 and less than or equal to 0.9")
       .createWithDefault(0.75)
 
-  val SHUFFLE_DAOS_WRITE_VALVE =
-    ConfigBuilder("spark.shuffle.daos.write.valve")
-      .doc("write data to DAOS when size of gathered data exceeds this value, in MiB")
+  val SHUFFLE_DAOS_WRITE_MINIMUM_SIZE =
+    ConfigBuilder("spark.shuffle.daos.write.minimum")
+      .doc("minimum size when write to DAOS, in KiB. A warning will be generated when size is less than this value.")
       .version("3.0.0")
-      .bytesConf(ByteUnit.MiB)
+      .bytesConf(ByteUnit.KiB)
       .checkValue(v => v > 0,
-        s"The DAOS write valve must be positive")
-      .createWithDefaultString("8m")
+        s"The DAOS write minimum size must be positive")
+      .createWithDefaultString("128k")
 
   val SHUFFLE_DAOS_WRITE_SINGLE_BUFFER_SIZE =
     ConfigBuilder("spark.shuffle.daos.write.buffer.single")

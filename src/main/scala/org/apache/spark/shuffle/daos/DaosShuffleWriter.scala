@@ -39,31 +39,62 @@ class DaosShuffleWriter[K, V, C](
 
   private val dep = handle.dependency
 
-  private var sorter: MapPartitionWriter[K, V, _] = null
+  private var partitionsWriter: MapPartitionWriter[K, V, _] = null
 
   private var stopping = false
 
   private var mapStatus: MapStatus = null
 
+  private val blockManager = SparkEnv.get.blockManager
+
   override def write(records: Iterator[Product2[K, V]]): Unit = {
-    sorter = if (dep.mapSideCombine) {
+    partitionsWriter = if (dep.mapSideCombine) {
       new MapPartitionWriter[K, V, C](
-        context, dep.aggregator, Some(dep.partitioner), dep.keyOrdering, dep.serializer, shuffleIO)
+        handle.shuffleId,
+        context,
+        dep.aggregator,
+        Some(dep.partitioner),
+        dep.keyOrdering,
+        dep.serializer,
+        shuffleIO)
     } else {
       // In this case we pass neither an aggregator nor an ordering to the sorter, because we don't
       // care whether the keys get sorted in each partition; that will be done on the reduce side
       // if the operation being run is sortByKey.
       new MapPartitionWriter[K, V, V](
-        context, aggregator = None, Some(dep.partitioner), ordering = None, dep.serializer, shuffleIO)
+        handle.shuffleId,
+        context,
+        aggregator = None,
+        Some(dep.partitioner),
+        ordering = None,
+        dep.serializer,
+        shuffleIO)
     }
-    sorter.insertAll(records)
-    //
-//    val mapOutputWriter = shuffleExecutorComponents.createMapOutputWriter(
-//      dep.shuffleId, mapId, dep.partitioner.numPartitions)
-//    sorter.writePartitionedMapOutput(dep.shuffleId, mapId, mapOutputWriter)
-//    val partitionLengths = mapOutputWriter.commitAllPartitions()
-//    mapStatus = MapStatus(blockManager.shuffleServerId, partitionLengths, mapId)
+    partitionsWriter.insertAll(records)
+    val partitionLengths = partitionsWriter.commitAll
+
+    mapStatus = MapStatus(blockManager.shuffleServerId, partitionLengths, mapId)
   }
 
-  override def stop(success: Boolean): Option[MapStatus] = ???
+  override def stop(success: Boolean): Option[MapStatus] = {
+    try {
+      if (stopping) {
+        return None
+      }
+      stopping = true
+      if (success) {
+        Option(mapStatus)
+      } else {
+        None
+      }
+    } finally {
+      // Clean up our sorter, which may have its own intermediate files
+      if (partitionsWriter != null) {
+        val startTime = System.nanoTime()
+        partitionsWriter.close
+        context.taskMetrics().shuffleWriteMetrics.incWriteTime(System.nanoTime - startTime)
+        partitionsWriter = null
+      }
+    }
+  }
 }

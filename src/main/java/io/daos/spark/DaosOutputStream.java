@@ -26,6 +26,9 @@ package io.daos.spark;
 import java.io.IOException;
 import java.io.OutputStream;
 
+/**
+ * OutputStream wrapper of {@link DaosWriter} for each map partition
+ */
 public class DaosOutputStream extends OutputStream {
 
   private int partitionId;
@@ -39,19 +42,19 @@ public class DaosOutputStream extends OutputStream {
   }
 
   @Override
-  public void write(int b) throws IOException {
+  public void write(int b) {
     daosWriter.write(partitionId, (byte)b);
     writtenBytes += 1;
   }
 
   @Override
-  public void write(byte[] b) throws IOException {
+  public void write(byte[] b) {
     daosWriter.write(partitionId, b);
     writtenBytes += b.length;
   }
 
   @Override
-  public void write(byte[] b, int off, int len) throws IOException {
+  public void write(byte[] b, int off, int len) {
     daosWriter.write(partitionId, b, off, len);
     writtenBytes += len;
   }

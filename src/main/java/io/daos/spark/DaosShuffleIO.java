@@ -25,6 +25,8 @@ package io.daos.spark;
 
 import io.daos.DaosClient;
 import io.daos.obj.DaosObjClient;
+import io.daos.obj.DaosObject;
+import io.daos.obj.DaosObjectId;
 import org.apache.spark.SparkConf;
 import org.apache.spark.shuffle.daos.package$;
 
@@ -37,7 +39,7 @@ public class DaosShuffleIO {
 
   private SparkConf conf;
 
-  private String appId;
+  private long appId;
 
   private String execId;
 
@@ -53,7 +55,7 @@ public class DaosShuffleIO {
     this.conf = conf;
   }
 
-  public void initialize(String appId, String execId, Map<String, String> driverConf) throws IOException {
+  public void initialize(long appId, String execId, Map<String, String> driverConf) throws IOException {
     this.appId = appId;
     this.execId = execId;
     this.driverConf = driverConf;
@@ -69,12 +71,11 @@ public class DaosShuffleIO {
       .build();
   }
 
-//  public DaosObjClient getObjClient() {
-//    return objClient;
-//  }
-
-  public DaosWriter getDaosWriter(Long mapId, int bufferSize, int writeValve) {
-    return new DaosWriter(mapId, bufferSize, writeValve, objClient);
+  public DaosWriter getDaosWriter(int shuffleId, long mapId, int bufferSize, int minSize) {
+    DaosObjectId id = new DaosObjectId(appId, shuffleId);
+    id.encode();
+    DaosObject object = objClient.getObject(id);
+    return new DaosWriter(appId, shuffleId, mapId, bufferSize, minSize, object);
   }
 
   public void close() throws IOException {

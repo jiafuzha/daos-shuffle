@@ -26,6 +26,13 @@ package org.apache.spark.shuffle.daos
 import org.apache.spark.unsafe.array.ByteArrayMethods
 import org.apache.spark.util.collection.SizeTracker
 
+/**
+ * Pair buffer for each partition.
+ *
+ * @param initialCapacity
+ * @tparam K
+ * @tparam V
+ */
 class PairBuffer[K, V](initialCapacity: Int = 64) extends SizeTracker {
   import PairBuffer._
 

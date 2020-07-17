@@ -46,9 +46,17 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       config.SHUFFLE_USE_OLD_FETCH_PROTOCOL.key)
   }
 
+  def parseAppId(appId: String): Long = {
+    appId.map(c => if (c.isDigit) c else 0.toChar).toLong
+  }
+
+  val appId = parseAppId(conf.getAppId)
+  conf.set(SHUFFLE_DAOS_APP_ID, appId.toString)
+  logInfo(s"application id: ${appId}")
+
   val daosShuffleIO = new DaosShuffleIO(conf)
   daosShuffleIO.initialize(
-    conf.getAppId,
+    appId,
     SparkEnv.get.executorId,
     conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX).toMap.asJava)
 
@@ -119,7 +127,7 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   override def unregisterShuffle(shuffleId: Int): Boolean = {
     Option(taskIdMapsForShuffle.remove(shuffleId)).foreach { mapTaskIds =>
       mapTaskIds.iterator.foreach { mapTaskId =>
-        // TODO: remove data_
+        // TODO: remove data from DAOS
         }
     }
     true

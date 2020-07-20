@@ -39,7 +39,7 @@ class DaosShuffleWriter[K, V, C](
 
   private val dep = handle.dependency
 
-  private var partitionsWriter: MapPartitionWriter[K, V, _] = null
+  private var partitionsWriter: MapPartitionsBuffer[K, V, _] = null
 
   private var stopping = false
 
@@ -49,7 +49,7 @@ class DaosShuffleWriter[K, V, C](
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     partitionsWriter = if (dep.mapSideCombine) {
-      new MapPartitionWriter[K, V, C](
+      new MapPartitionsBuffer[K, V, C](
         handle.shuffleId,
         context,
         dep.aggregator,
@@ -61,7 +61,7 @@ class DaosShuffleWriter[K, V, C](
       // In this case we pass neither an aggregator nor an ordering to the sorter, because we don't
       // care whether the keys get sorted in each partition; that will be done on the reduce side
       // if the operation being run is sortByKey.
-      new MapPartitionWriter[K, V, V](
+      new MapPartitionsBuffer[K, V, V](
         handle.shuffleId,
         context,
         aggregator = None,

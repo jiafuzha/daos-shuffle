@@ -35,7 +35,7 @@ import org.apache.spark.{Aggregator, Partitioner, SparkConf, SparkEnv, TaskConte
 
 import scala.collection.mutable
 
-class MapPartitionWriter[K, V, C](
+class MapPartitionsBuffer[K, V, C](
     shuffleId: Int,
     context: TaskContext,
     aggregator: Option[Aggregator[K, V, C]] = None,
@@ -77,7 +77,7 @@ class MapPartitionWriter[K, V, C](
   }
 
   // buffer by partition
-  @volatile var writeBuffer = new WriteBuffer[K, C](
+  @volatile var writeBuffer = new PartitionsBuffer[K, C](
     numPartitions,
     comparator,
     conf,
@@ -141,7 +141,7 @@ class MapPartitionWriter[K, V, C](
    * @tparam K
    * @tparam C
    */
-  private[daos] class WriteBuffer[K, C](
+  private[daos] class PartitionsBuffer[K, C](
       numPartitions: Int,
       val keyComparator: Option[Comparator[K]],
       val conf: SparkConf,
@@ -316,7 +316,7 @@ class MapPartitionWriter[K, V, C](
 
     def reset: Unit
 
-    def parent: WriteBuffer[K, C]
+    def parent: PartitionsBuffer[K, C]
 
     def pairsWriter: PartitionOutput
 
@@ -384,7 +384,7 @@ class MapPartitionWriter[K, V, C](
       val partitionId: Int,
       val writeThreshold: Int,
       taskMemoryManager: TaskMemoryManager,
-      val parent: WriteBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
+      val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
     private var map = new SizeTrackingAppendOnlyMap[K, C]
 
@@ -419,7 +419,7 @@ class MapPartitionWriter[K, V, C](
     val partitionId: Int,
     val writeThreshold: Int,
     taskMemoryManager: TaskMemoryManager,
-    val parent: WriteBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
+    val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
     private var buffer = new PairBuffer[K, C]
 

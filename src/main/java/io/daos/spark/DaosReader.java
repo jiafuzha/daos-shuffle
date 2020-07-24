@@ -1,0 +1,229 @@
+/*
+ * (C) Copyright 2018-2020 Intel Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * GOVERNMENT LICENSE RIGHTS-OPEN SOURCE SOFTWARE
+ * The Government's rights to use, modify, reproduce, release, perform, display,
+ * or disclose this software are subject to the terms of the Apache License as
+ * provided in Contract No. B609815.
+ * Any reproduction of computer software, computer software documentation, or
+ * portions thereof marked with this legend must also reproduce the markings.
+ */
+
+package io.daos.spark;
+
+import io.daos.obj.DaosObject;
+import io.daos.obj.IODataDesc;
+import io.netty.util.internal.ObjectPool;
+import org.apache.spark.SparkConf;
+import org.apache.spark.SparkEnv;
+import org.apache.spark.launcher.SparkLauncher;
+import org.apache.spark.shuffle.daos.package$;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+
+public class DaosReader {
+
+  private int reduceId;
+
+  private DaosObject object;
+
+  private Map<DaosInputStream.BufferSource, Integer> bufferSourceMap = new ConcurrentHashMap<>();
+
+  private static SparkConf conf = SparkEnv.get().conf();
+
+  private static int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS().key(),
+      conf.getInt(SparkLauncher.EXECUTOR_CORES, 1));
+
+  private static Logger logger = LoggerFactory.getLogger(DaosReader.class);
+
+  private static BoundThreadExecutors executor = new BoundThreadExecutors("read_executors", threads,
+      new ReadThreadFactory());
+
+  static {
+    executor.initialize();
+  }
+
+  public DaosReader(int reduceId, DaosObject object) {
+    this.reduceId = reduceId;
+    this.object = object;
+  }
+
+  public DaosObject getObject() {
+    return object;
+  }
+
+  public int getReduceId() {
+    return reduceId;
+  }
+
+  public Executor nextReaderExecutor() {
+    return executor.nextExecutor();
+  }
+
+  public void close() throws IOException {
+    object.close();
+    // force releasing
+    bufferSourceMap.forEach((k, v) -> k.cleanup(true));
+    bufferSourceMap.clear();
+  }
+
+  public static void stopExecutor() {
+    executor.stop();
+  }
+
+  @Override
+  public String toString() {
+    return "DaosReader{" +
+        "reduceId=" + reduceId +
+        ", object=" + object +
+        '}';
+  }
+
+  public void register(DaosInputStream.BufferSource source) {
+    bufferSourceMap.put(source, null);
+  }
+
+  public void unregister(DaosInputStream.BufferSource source) {
+    bufferSourceMap.remove(source);
+  }
+
+  final static class ReadTask implements Runnable {
+    private ReadTaskContext context;
+    private final ObjectPool.Handle<ReadTask> handle;
+
+    private final static ObjectPool<ReadTask> objectPool = ObjectPool.newPool(handle -> new ReadTask(handle));
+
+    private static final Logger log = LoggerFactory.getLogger(ReadTask.class);
+
+    static ReadTask newInstance(ReadTaskContext context) {
+      ReadTask task = objectPool.get();
+      task.context = context;
+      return task;
+    }
+
+    private ReadTask(ObjectPool.Handle<ReadTask> handle) {
+      this.handle = handle;
+    }
+
+    @Override
+    public void run() {
+      boolean cancelled = context.cancelled;
+      try {
+        if (!cancelled) {
+          context.object.fetch(context.desc);
+          context.counter.getAndIncrement();
+          context.signal();
+        }
+      } catch (IOException e) {
+        log.error("failed to read for " + context.desc, e);
+      } finally {
+        if (cancelled) {
+          context.desc.release();
+        } else {
+          context.desc.release(false);
+        }
+        context = null;
+        handle.recycle(this);
+      }
+    }
+  }
+
+  /**
+   * should be cached in caller thread.
+   */
+  final static class ReadTaskContext {
+    private final DaosObject object;
+    private final AtomicInteger counter;
+    private final Lock takeLock;
+    private final Condition notEmpty;
+    private IODataDesc desc;
+    private volatile boolean cancelled; // for multi-thread
+    private boolean cancelledByCaller; // for accessing by caller
+    private ReadTaskContext next;
+
+    public ReadTaskContext(DaosObject object, AtomicInteger counter, Lock takeLock, Condition notEmpty,
+                           IODataDesc desc) {
+      this.object = object;
+      this.counter = counter;
+      this.takeLock = takeLock;
+      this.notEmpty = notEmpty;
+      this.desc = desc;
+    }
+
+    public void reuse(IODataDesc desc) {
+      this.desc = desc;
+      cancelled = false;
+      cancelledByCaller = false;
+      next = null;
+    }
+
+    public void setNext(ReadTaskContext next) {
+      this.next = next;
+    }
+
+    public ReadTaskContext getNext() {
+      return next;
+    }
+
+    public void signal() {
+      takeLock.lock();
+      try {
+        notEmpty.signal();
+      } finally {
+        takeLock.unlock();
+      }
+    }
+
+    public IODataDesc getDesc() {
+      return desc;
+    }
+
+    public void cancel() {
+      cancelled = true;
+      cancelledByCaller = true;
+      next = null;
+    }
+
+    public boolean isCancelled() {
+      return cancelledByCaller;
+    }
+  }
+
+  private static class ReadThreadFactory implements ThreadFactory {
+    private AtomicInteger id = new AtomicInteger(0);
+
+    @Override
+    public Thread newThread(Runnable runnable) {
+      Thread t;
+      String name = "daos_read_" + id.getAndIncrement();
+      if (runnable == null) {
+        t = new Thread(name);
+      } else {
+        t = new Thread(runnable, name);
+      }
+      t.setUncaughtExceptionHandler((thread, throwable) ->
+          logger.error("exception occurred in thread " + name, throwable));
+      return t;
+    }
+  }
+
+}

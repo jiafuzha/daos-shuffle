@@ -194,7 +194,7 @@ class MapPartitionsBuffer[K, V, C](
       }
       val (head, end) = if (comparator.isDefined) (mapHead, mapEnd) else (bufferHead, bufferEnd)
       val (first, last) = if (comparator.isDefined) (partitionMap(0), partitionMap(numPartitions - 1))
-      else (partitionBuffer(0), partitionBuffer(numPartitions - 1))
+        else (partitionBuffer(0), partitionBuffer(numPartitions - 1))
       head.next = first
       first.prev = head
       end.prev = last
@@ -243,7 +243,7 @@ class MapPartitionsBuffer[K, V, C](
       afterUpdate(estSize, buffer)
     }
 
-    def afterUpdate[T <: SizeAware[K, C] with Linked[K, C]](estSize: Long, buffer: T): Unit ={
+    def afterUpdate[T <: SizeAware[K, C] with Linked[K, C]](estSize: Long, buffer: T): Unit = {
       if (estSize > largestSize) {
         largestSize = estSize
         moveToFirst(head, buffer)

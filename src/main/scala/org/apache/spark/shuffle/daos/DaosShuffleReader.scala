@@ -39,7 +39,15 @@ class DaosShuffleReader[K, C](
     serializerManager: SerializerManager = SparkEnv.get.serializerManager,
     blockManager: BlockManager = SparkEnv.get.blockManager,
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker,
+    partitionId: Int,
     shouldBatchFetch: Boolean = false)
   extends ShuffleReader[K, C] with Logging {
-  override def read(): Iterator[Product2[K, C]] = ???
+
+  private val dep = handle.dependency
+
+  private val daosReader = shuffleIO.getDaosReader(handle.shuffleId, partitionId);
+
+  override def read(): Iterator[Product2[K, C]] = {
+
+  }
 }

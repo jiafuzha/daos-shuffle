@@ -106,4 +106,49 @@ package object daos {
       .checkValue(v => v >= 1,
         s"The single DAOS write buffer must be at least 1m")
       .createWithDefaultString("2m")
+
+  val SHUFFLE_DAOS_READ_MINIMUM_SIZE =
+    ConfigBuilder("spark.shuffle.daos.read.minimum")
+      .doc("minimum size when read from DAOS, in MiB. ")
+      .version("3.0.0")
+      .bytesConf(ByteUnit.MiB)
+      .checkValue(v => v > 0,
+        s"The DAOS read minimum size must be positive")
+      .createWithDefaultString("2m")
+
+  val SHUFFLE_DAOS_READ_THREADS =
+    ConfigBuilder("spark.shuffle.daos.read.threads")
+      .doc("number of threads for each executor to read shuffle data concurrently. -1 means use number of executor " +
+        "cores.")
+      .version("3.0.0")
+      .intConf
+      .createWithDefault(-1)
+
+  val SHUFFLE_DAOS_READ_BATCH_SIZE =
+    ConfigBuilder("spark.shuffle.daos.read.batch")
+      .doc("number of read task to submit at each time")
+      .version("3.0.0")
+      .intConf
+      .checkValue(v => v > 0,
+        s"read batch size must be positive")
+      .createWithDefault(10)
+
+  val SHUFFLE_DAOS_READ_WAIT_DATA_MS =
+    ConfigBuilder("spark.shuffle.daos.read.waitdata.ms")
+      .doc("number of milliseconds to wait data being read from other thread")
+      .version("3.0.0")
+      .intConf
+      .checkValue(v => v > 0,
+        s"wait data time must be positive")
+      .createWithDefault(100)
+
+  val SHUFFLE_DAOS_READ_WAIT_DATA_TIMEOUT_TIMES =
+    ConfigBuilder("spark.shuffle.daos.read.wait.timeout.times")
+      .doc("number of wait timeout (spark.shuffle.daos.read.waitdata.ms) after which shuffle read task reads data " +
+        "by itself instead of dedicated read thread")
+      .version("3.0.0")
+      .intConf
+      .checkValue(v => v > 0,
+        s"wait data timeout times must be positive")
+      .createWithDefault(10)
 }

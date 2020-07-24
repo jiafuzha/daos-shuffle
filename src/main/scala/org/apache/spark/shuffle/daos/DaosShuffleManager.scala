@@ -25,12 +25,15 @@ package org.apache.spark.shuffle.daos
 
 import java.util.concurrent.ConcurrentHashMap
 
+import io.daos.{DaosClient, ShutdownHookManager}
 import io.daos.spark.DaosShuffleIO
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.shuffle.sort.SortShuffleManager.canUseBatchFetch
 import org.apache.spark.shuffle._
+import org.apache.spark.util.ShutdownHookManager
 import org.apache.spark.util.collection.OpenHashSet
+
 import collection.JavaConverters._;
 
 /**
@@ -53,6 +56,10 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   val appId = parseAppId(conf.getAppId)
   conf.set(SHUFFLE_DAOS_APP_ID, appId.toString)
   logInfo(s"application id: ${appId}")
+
+  if (io.daos.ShutdownHookManager.removeHook(DaosClient.FINALIZER)) {
+    ShutdownHookManager.addHook(DaosClient.FINALIZER)
+  }
 
   val daosShuffleIO = new DaosShuffleIO(conf)
   daosShuffleIO.initialize(
@@ -83,7 +90,9 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
    */
   override def registerShuffle[K, V, C](
       shuffleId: Int,
-      dependency: ShuffleDependency[K, V, C]): ShuffleHandle = {
+      dependency: ShuffleDependency[K, V, C])
+
+    = {
     new BaseShuffleHandle(shuffleId, dependency)
   }
 
@@ -91,7 +100,9 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       handle: ShuffleHandle,
       mapId: Long,
       context: TaskContext,
-      metrics: ShuffleWriteMetricsReporter): ShuffleWriter[K, V] = {
+      metrics: ShuffleWriteMetricsReporter)
+
+    = {
     val mapTaskIds = taskIdMapsForShuffle.computeIfAbsent(
       handle.shuffleId, _ => new OpenHashSet[Long](16))
     mapTaskIds.synchronized { mapTaskIds.add(context.taskAttemptId()) }
@@ -103,7 +114,9 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       startPartition: Int,
       endPartition: Int,
       context: TaskContext,
-      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+      metrics: ShuffleReadMetricsReporter)
+
+    = {
     val blocksByAddress = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(
       handle.shuffleId, startPartition, endPartition)
     new DaosShuffleReader(handle.asInstanceOf[BaseShuffleHandle[K, _, C]], blocksByAddress, context,
@@ -117,23 +130,29 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       startPartition: Int,
       endPartition: Int,
       context: TaskContext,
-      metrics: ShuffleReadMetricsReporter): ShuffleReader[K, C] = {
+      metrics: ShuffleReadMetricsReporter)
+
+    = {
     val blocksByAddress = SparkEnv.get.mapOutputTracker.getMapSizesByRange(
       handle.shuffleId, startMapIndex, endMapIndex, startPartition, endPartition)
     new DaosShuffleReader(handle.asInstanceOf[BaseShuffleHandle[K, _, C]], blocksByAddress, context,
       metrics, daosShuffleIO, shouldBatchFetch = canUseBatchFetch(startPartition, endPartition, context))
   }
 
-  override def unregisterShuffle(shuffleId: Int): Boolean = {
+  override def unregisterShuffle(shuffleId: Int)
+
+    = {
     Option(taskIdMapsForShuffle.remove(shuffleId)).foreach { mapTaskIds =>
       mapTaskIds.iterator.foreach { mapTaskId =>
-        // TODO: remove data from DAOS
+        // TODO: remove data from DAOS, object punch here
         }
     }
     true
   }
 
-  override def shuffleBlockResolver: ShuffleBlockResolver = null
+  override def shuffleBlockResolver
+
+    = null
 
   override def stop(): Unit = {
     daosShuffleIO.close()

@@ -26,11 +26,16 @@ package io.daos.spark;
 import io.daos.DaosClient;
 import io.daos.obj.DaosObjClient;
 import io.daos.obj.DaosObject;
+import io.daos.obj.DaosObjectException;
 import io.daos.obj.DaosObjectId;
 import org.apache.spark.SparkConf;
 import org.apache.spark.shuffle.daos.package$;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class DaosShuffleIO {
@@ -51,9 +56,13 @@ public class DaosShuffleIO {
 
   private String ranks;
 
+  private List<DaosReader> readerList = new ArrayList<>();
+
   public DaosShuffleIO(SparkConf conf) {
     this.conf = conf;
   }
+
+  private static final Logger logger = LoggerFactory.getLogger(DaosShuffleIO.class);
 
   public void initialize(long appId, String execId, Map<String, String> driverConf) throws IOException {
     this.appId = appId;
@@ -71,14 +80,34 @@ public class DaosShuffleIO {
       .build();
   }
 
-  public DaosWriter getDaosWriter(int shuffleId, long mapId, int bufferSize, int minSize) {
+  public DaosWriter getDaosWriter(int shuffleId, long mapId, int bufferSize, int minSize) throws IOException {
     DaosObjectId id = new DaosObjectId(appId, shuffleId);
     id.encode();
     DaosObject object = objClient.getObject(id);
+    object.open();
     return new DaosWriter(appId, shuffleId, mapId, bufferSize, minSize, object);
   }
 
+  public DaosReader getDaosReader(int shuffleId, int reduceId) throws DaosObjectException {
+    DaosObjectId id = new DaosObjectId(appId, shuffleId);
+    id.encode();
+    DaosObject object = objClient.getObject(id);
+    object.open();
+    DaosReader reader = new DaosReader(reduceId, object);
+    readerList.add(reader);
+    return reader;
+  }
+
   public void close() throws IOException {
+    readerList.forEach(r -> {
+      try {
+        r.close();
+      } catch (IOException e) {
+        logger.warn("failed to close reader " + r.toString());
+      }
+    });
+    readerList.clear();
+    DaosReader.stopExecutor();
     objClient.forceClose();
     DaosClient.daosSafeFinalize();
   }

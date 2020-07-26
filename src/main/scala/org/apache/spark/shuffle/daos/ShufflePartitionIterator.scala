@@ -1,17 +1,15 @@
 package org.apache.spark.shuffle.daos
 
-import java.io.InputStream
+import java.io.{IOException, InputStream}
 import java.util
-import java.util.concurrent.LinkedBlockingQueue
 
-import io.daos.spark.{DaosInputStream, DaosReader}
-import org.apache.spark.{SparkEnv, TaskContext}
+import io.daos.spark.{DaosReader, DaosShuffleInputStream}
+import org.apache.commons.io.IOUtils
+import org.apache.spark.{SparkEnv, SparkException, TaskContext}
 import org.apache.spark.internal.Logging
-import org.apache.spark.shuffle.ShuffleReadMetricsReporter
-import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockId}
-import org.apache.spark.util.TaskCompletionListener
-
-import scala.collection.mutable
+import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
+import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockBatchId, ShuffleBlockId}
+import org.apache.spark.util.{CompletionIterator, TaskCompletionListener, Utils}
 
 class ShufflePartitionIterator(
     context: TaskContext,
@@ -25,27 +23,11 @@ class ShufflePartitionIterator(
     daosReader: DaosReader,
     doBatchFetch: Boolean) extends Iterator[(BlockId, InputStream)] with Logging {
 
-  private var nbrOfPartitionFetched = 0
-
-  private var nbrOfPartitionProcessed = 0
-
-  private var bytesInFlight = 0L
-
-  private val corruptedBlocks = mutable.HashSet[BlockId]()
-
-  private val results = new LinkedBlockingQueue[AnyRef]
-
-  private var isZombie = false
-
-  private val conf = SparkEnv.get.conf
-
-  private val startTimeNs = System.nanoTime()
-
   private var lastBlockId: ShuffleBlockId = null
 
-  private var inputStream: DaosInputStream = null
+  private var inputStream: DaosShuffleInputStream = null
 
-  private var done = false;
+  private var done = false
 
   private val onCompleteCallback = new ShufflePartitionCompletionListener(this)
 
@@ -57,7 +39,7 @@ class ShufflePartitionIterator(
   }
 
   def startReading: Unit = {
-    val javaMap = new util.LinkedHashMap[Integer, java.lang.Long]()
+    val javaMap = new util.LinkedHashMap[Integer, (java.lang.Long, BlockId, BlockManagerId)]()
     blocksByAddress.foreach(t2 => {
       t2._2.foreach(t3 => {
         if (javaMap.containsKey(t3._3)) {
@@ -67,9 +49,9 @@ class ShufflePartitionIterator(
         lastBlockId = t3._1.asInstanceOf[ShuffleBlockId]
       })
     })
-    inputStream = new DaosInputStream(daosReader, javaMap,
-      maxBytesInFlight, maxReqSizeShuffleToMem)
 
+    inputStream = new DaosShuffleInputStream(daosReader, javaMap,
+      maxBytesInFlight, maxReqSizeShuffleToMem, shuffleMetrics)
   }
 
   override def hasNext: Boolean = {
@@ -81,8 +63,125 @@ class ShufflePartitionIterator(
       throw new NoSuchElementException
     }
     done = true
-    (lastBlockId, new BufferReleasingInputStream(inputStream))
+    var input: InputStream = null
+    var streamCompressedOrEncryptd = false
+    try {
+      streamWrapper(lastBlockId, inputStream)
+      streamCompressedOrEncryptd = !input.eq(inputStream)
+      if (streamCompressedOrEncryptd && detectCorruptUseExtraMemory) {
+        input = Utils.copyStreamUpTo(input, maxBytesInFlight / 3);
+      }
+    } catch {
+      case e: IOException =>
+        logError(s"got an corrupted block ${inputStream.getCurBlockId} originated from " +
+          s"${inputStream.getCurOriginAddress}.", e)
+        throw e
+    } finally {
+      inputStream.close()
+    }
+    (lastBlockId, new BufferReleasingInputStream(inputStream, this,
+      detectCorrupt && streamCompressedOrEncryptd))
   }
+
+  def throwFetchFailedException(
+      blockId: BlockId,
+      mapIndex: Int,
+      address: BlockManagerId,
+      e: Throwable) = {
+    blockId match {
+      case ShuffleBlockId(shufId, mapId, reduceId) =>
+        throw new FetchFailedException(address, shufId, mapId, mapIndex, reduceId, e)
+      case ShuffleBlockBatchId(shuffleId, mapId, startReduceId, _) =>
+        throw new FetchFailedException(address, shuffleId, mapId, mapIndex, startReduceId, e)
+      case _ =>
+        throw new SparkException(
+          "Failed to get block " + blockId + ", which is not a shuffle block", e)
+    }
+  }
+
+  def toCompletionIterator: Iterator[(BlockId, InputStream)] = {
+    CompletionIterator[(BlockId, InputStream), this.type](this,
+      onCompleteCallback.onTaskCompletion(context))
+  }
+
+  def cleanup: Unit = {
+    if (inputStream != null) {
+      inputStream.close()
+    }
+  }
+
+}
+
+/**
+ * Helper class that ensures a ManagedBuffer is released upon InputStream.close() and
+ * also detects stream corruption if streamCompressedOrEncrypted is true
+ */
+private class BufferReleasingInputStream(
+                                          // This is visible for testing
+                                          private val delegate: DaosShuffleInputStream,
+                                          private val iterator: ShufflePartitionIterator,
+                                          private val detectCorruption: Boolean)
+  extends InputStream {
+  private[this] var closed = false
+
+  override def read(): Int = {
+    try {
+      delegate.read()
+    } catch {
+      case e: IOException if detectCorruption =>
+        IOUtils.closeQuietly(this)
+        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
+          delegate.getCurOriginAddress, e)
+    }
+  }
+
+  override def close(): Unit = {
+    if (!closed) {
+      delegate.close()
+      closed = true
+    }
+  }
+
+  override def available(): Int = delegate.available()
+
+  override def mark(readlimit: Int): Unit = delegate.mark(readlimit)
+
+  override def skip(n: Long): Long = {
+    try {
+      delegate.skip(n)
+    } catch {
+      case e: IOException if detectCorruption =>
+        IOUtils.closeQuietly(this)
+        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
+          delegate.getCurOriginAddress, e)
+    }
+  }
+
+  override def markSupported(): Boolean = delegate.markSupported()
+
+  override def read(b: Array[Byte]): Int = {
+    try {
+      delegate.read(b)
+    } catch {
+      case e: IOException if detectCorruption =>
+        IOUtils.closeQuietly(this)
+        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
+          delegate.getCurOriginAddress, e)
+    }
+  }
+
+  override def read(b: Array[Byte], off: Int, len: Int): Int = {
+    try {
+      delegate.read(b, off, len)
+    } catch {
+      case e: IOException if detectCorruption =>
+        IOUtils.closeQuietly(this)
+        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
+          delegate.getCurOriginAddress, e)
+    }
+  }
+
+  override def reset(): Unit = delegate.reset()
 }
 
 private class ShufflePartitionCompletionListener(var data: ShufflePartitionIterator)
@@ -90,8 +189,7 @@ private class ShufflePartitionCompletionListener(var data: ShufflePartitionItera
 
   override def onTaskCompletion(context: TaskContext): Unit = {
     if (data != null) {
-      data.cleanup()
-      data = null
+      data.cleanup
     }
   }
 }

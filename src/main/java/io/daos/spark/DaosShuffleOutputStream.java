@@ -29,14 +29,14 @@ import java.io.OutputStream;
 /**
  * OutputStream wrapper of {@link DaosWriter} for each map partition
  */
-public class DaosOutputStream extends OutputStream {
+public class DaosShuffleOutputStream extends OutputStream {
 
   private int partitionId;
   private DaosWriter daosWriter;
 
   private long writtenBytes = 0L;
 
-  public DaosOutputStream(int partitionId, DaosWriter daosWriter) {
+  public DaosShuffleOutputStream(int partitionId, DaosWriter daosWriter) {
     this.partitionId = partitionId;
     this.daosWriter = daosWriter;
   }

@@ -28,9 +28,13 @@ import io.daos.obj.IODataDesc;
 import io.netty.buffershade5.ByteBuf;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkEnv;
+import org.apache.spark.shuffle.ShuffleReadMetricsReporter;
 import org.apache.spark.shuffle.daos.package$;
+import org.apache.spark.storage.BlockId;
+import org.apache.spark.storage.BlockManagerId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.Tuple3;
 
 import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
@@ -43,7 +47,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 @NotThreadSafe
-public class DaosInputStream extends InputStream {
+public class DaosShuffleInputStream extends InputStream {
 
   private DaosReader reader;
 
@@ -53,24 +57,47 @@ public class DaosInputStream extends InputStream {
 
   private ReaderConfig config;
 
+  private ShuffleReadMetricsReporter metrics;
+
   private boolean fromOtherThread = true;
 
-  private LinkedHashMap<Integer, Long> partSizeMap; // ensure the order of partition
+  private boolean cleaned;
+
+  private LinkedHashMap<Integer, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap; // ensure the order of partition
   private Iterator<Integer> mapIdIt;
 
   private BufferSource source = new BufferSource();
 
-  private static final Logger log = LoggerFactory.getLogger(DaosInputStream.class);
+  private static final Logger log = LoggerFactory.getLogger(DaosShuffleInputStream.class);
 
-  public DaosInputStream(DaosReader reader, LinkedHashMap<Integer, Long> partSizeMap,
-                         long maxBytesInFlight, long maxMem) {
+  public DaosShuffleInputStream(DaosReader reader, LinkedHashMap<Integer, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap,
+                                long maxBytesInFlight, long maxMem, ShuffleReadMetricsReporter metrics) {
     this.reader = reader;
     reader.register(source);
     this.executor = reader.nextReaderExecutor();
     this.object = reader.getObject();
     this.config = new ReaderConfig(maxBytesInFlight, maxMem);
     this.partSizeMap = partSizeMap;
+    this.metrics = metrics;
     this.mapIdIt = partSizeMap.keySet().iterator();
+  }
+
+  public BlockId getCurBlockId() {
+    if (source.curMapId < 0) {
+      return null;
+    }
+    return partSizeMap.get(source.curMapId)._2();
+  }
+
+  public BlockManagerId getCurOriginAddress() {
+    if (source.curMapId < 0) {
+      return null;
+    }
+    return partSizeMap.get(source.curMapId)._3();
+  }
+
+  public int getCurMapIndex() {
+    return source.curMapId;
   }
 
   @Override
@@ -81,28 +108,17 @@ public class DaosInputStream extends InputStream {
         return completeAndCleanup();
       }
       if (buf.readableBytes() >= 1) {
+        metrics.incRemoteBytesRead(1);
         return buf.readByte();
       }
     }
   }
 
-  private int completeAndCleanup() throws IOException {
-    source.checkPartitionSize(source.currentEntry.getKey());
-    cleanup();
-    return -1;
-  }
-
-  private void cleanup() {
-    boolean allReleased = source.cleanup(false);
-    if (allReleased) {
-      reader.unregister(source);
-    }
-    source = null;
-  }
-
   @Override
   public int read(byte[] bytes) throws IOException {
-    return read(bytes, 0, bytes.length);
+    int len = read(bytes, 0, bytes.length);
+    metrics.incRemoteBytesRead(len);
+    return len;
   }
 
   @Override
@@ -115,6 +131,7 @@ public class DaosInputStream extends InputStream {
       }
       if (len <= buf.readableBytes()) {
         buf.readBytes(bytes, offset, len);
+        metrics.incRemoteBytesRead(length);
         return length;
       }
       int maxRead = buf.readableBytes();
@@ -122,6 +139,27 @@ public class DaosInputStream extends InputStream {
       offset += maxRead;
       len -= maxRead;
     }
+  }
+
+  private int completeAndCleanup() throws IOException {
+    source.checkPartitionSize(source.currentEntry.getKey());
+    return -1;
+  }
+
+  private void cleanup() {
+    if (!cleaned) {
+      boolean allReleased = source.cleanup(false);
+      if (allReleased) {
+        reader.unregister(source);
+      }
+      source = null;
+      cleaned = true;
+    }
+  }
+
+  @Override
+  public void close() {
+    cleanup();
   }
 
   public class BufferSource {
@@ -215,7 +253,7 @@ public class DaosInputStream extends InputStream {
         return desc;
       }
       // wait for specified time
-      desc = waitForValid();
+      desc = waitForValidFromOtherThread();
       if (desc != null) {
         return desc;
       }
@@ -237,15 +275,17 @@ public class DaosInputStream extends InputStream {
       return null;
     }
 
-    private IODataDesc waitForValid() throws InterruptedException, IOException {
+    private IODataDesc waitForValidFromOtherThread() throws InterruptedException, IOException {
       IODataDesc desc;
       while (true) {
         boolean timeout = false;
         takeLock.lockInterruptibly();
         try {
+          long start = System.nanoTime();
           if (!notEmpty.await(config.waitDataTimeMs, TimeUnit.MILLISECONDS)) {
             timeout = true;
           }
+          metrics.incFetchWaitTime(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
         } finally {
           takeLock.unlock();
         }
@@ -297,6 +337,7 @@ public class DaosInputStream extends InputStream {
       if (desc == null) {
         return null;
       }
+      metrics.incRemoteBlocksFetched(1);
       currentDesc = currentCtx.getDesc();
       return currentDesc;
     }
@@ -393,6 +434,7 @@ public class DaosInputStream extends InputStream {
       boolean releaseBuf = false;
       try {
         object.fetch(desc);
+        metrics.incRemoteBlocksFetched(1);
         currentDesc = desc;
         return validateAndGetBuf(desc.getEntry(entryIdx));
       } catch (IOException | IllegalStateException e) {
@@ -411,7 +453,7 @@ public class DaosInputStream extends InputStream {
         if (mapId < 0) {
           break;
         }
-        long readSize = partSizeMap.get(mapId) - curOffset;
+        long readSize = partSizeMap.get(mapId)._1() - curOffset;
         long offset = curOffset;
         if (readSize > remaining) {
           readSize = remaining;
@@ -482,7 +524,7 @@ public class DaosInputStream extends InputStream {
     }
 
     private void checkPartitionSize(String curAkey) throws IOException {
-      if (currentPartSize != partSizeMap.get(Integer.valueOf(curAkey))) {
+      if (currentPartSize != partSizeMap.get(Integer.valueOf(curAkey))._1()) {
         throw new IOException("expect partition size " + partSizeMap.get(Integer.valueOf(curAkey)) +
             ", actual size " + currentPartSize);
       }
@@ -490,9 +532,11 @@ public class DaosInputStream extends InputStream {
 
     public boolean cleanup(boolean force) {
       boolean allReleased = true;
-      allReleased &= cleanupTaskContext(currentCtx, force);
-      allReleased &= cleanupTaskContexts(consumedStack, force);
-      allReleased &= cleanupTaskContexts(discardedSet, force);
+      if (!cleaned) {
+        allReleased &= cleanupTaskContext(currentCtx, force);
+        allReleased &= cleanupTaskContexts(consumedStack, force);
+        allReleased &= cleanupTaskContexts(discardedSet, force);
+      }
       return allReleased;
     }
 

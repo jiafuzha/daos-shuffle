@@ -46,7 +46,7 @@ public class DaosReader {
 
   private DaosObject object;
 
-  private Map<DaosInputStream.BufferSource, Integer> bufferSourceMap = new ConcurrentHashMap<>();
+  private Map<DaosShuffleInputStream.BufferSource, Integer> bufferSourceMap = new ConcurrentHashMap<>();
 
   private static SparkConf conf = SparkEnv.get().conf();
 
@@ -98,11 +98,11 @@ public class DaosReader {
         '}';
   }
 
-  public void register(DaosInputStream.BufferSource source) {
+  public void register(DaosShuffleInputStream.BufferSource source) {
     bufferSourceMap.put(source, null);
   }
 
-  public void unregister(DaosInputStream.BufferSource source) {
+  public void unregister(DaosShuffleInputStream.BufferSource source) {
     bufferSourceMap.remove(source);
   }
 

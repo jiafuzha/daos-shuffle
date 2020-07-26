@@ -25,7 +25,7 @@ package org.apache.spark.shuffle.daos
 
 import java.io.OutputStream
 
-import io.daos.spark.{DaosOutputStream, DaosWriter}
+import io.daos.spark.{DaosShuffleOutputStream, DaosWriter}
 import org.apache.spark.serializer.{SerializationStream, SerializerInstance, SerializerManager}
 import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.storage.{ShuffleBlockId, TimeTrackingOutputStream}
@@ -40,7 +40,7 @@ class PartitionOutput(
   daosWriter: DaosWriter,
   writeMetrics: ShuffleWriteMetricsReporter) {
 
-  private var ds: DaosOutputStream = null
+  private var ds: DaosShuffleOutputStream = null
 
   private var ts: TimeTrackingOutputStream = null
 
@@ -55,7 +55,7 @@ class PartitionOutput(
   private var lastWrittenBytes = 0L
 
   def open: Unit = {
-    ds = new DaosOutputStream(partitionId, daosWriter)
+    ds = new DaosShuffleOutputStream(partitionId, daosWriter)
     ts = new TimeTrackingOutputStream(writeMetrics, ds)
     bs = serializerManager.wrapStream(ShuffleBlockId(shuffleId, mapId, partitionId), ts)
     objOut = serializerInstance.serializeStream(bs)

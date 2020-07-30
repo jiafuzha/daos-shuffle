@@ -21,7 +21,7 @@
  * portions thereof marked with this legend must also reproduce the markings.
  */
 
-package io.daos.spark;
+package org.apache.spark.shuffle.daos;
 
 import io.daos.obj.DaosObject;
 import io.daos.obj.IODataDesc;
@@ -29,9 +29,9 @@ import io.netty.util.internal.ObjectPool;
 import org.apache.spark.SparkConf;
 import org.apache.spark.SparkEnv;
 import org.apache.spark.launcher.SparkLauncher;
-import org.apache.spark.shuffle.daos.package$;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.Tuple2;
 
 import java.io.IOException;
 import java.util.Map;
@@ -41,8 +41,6 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 
 public class DaosReader {
-
-  private int reduceId;
 
   private DaosObject object;
 
@@ -55,15 +53,10 @@ public class DaosReader {
 
   private static Logger logger = LoggerFactory.getLogger(DaosReader.class);
 
-  private static BoundThreadExecutors executor = new BoundThreadExecutors("read_executors", threads,
+  private static BoundThreadExecutors executors = new BoundThreadExecutors("read_executors", threads,
       new ReadThreadFactory());
 
-  static {
-    executor.initialize();
-  }
-
-  public DaosReader(int reduceId, DaosObject object) {
-    this.reduceId = reduceId;
+  public DaosReader(DaosObject object) {
     this.object = object;
   }
 
@@ -71,12 +64,8 @@ public class DaosReader {
     return object;
   }
 
-  public int getReduceId() {
-    return reduceId;
-  }
-
-  public Executor nextReaderExecutor() {
-    return executor.nextExecutor();
+  public BoundThreadExecutors.SingleThreadExecutor nextReaderExecutor() {
+    return executors.nextExecutor();
   }
 
   public void close() throws IOException {
@@ -87,19 +76,18 @@ public class DaosReader {
   }
 
   public static void stopExecutor() {
-    executor.stop();
+    executors.stop();
   }
 
   @Override
   public String toString() {
     return "DaosReader{" +
-        "reduceId=" + reduceId +
-        ", object=" + object +
+        "object=" + object +
         '}';
   }
 
   public void register(DaosShuffleInputStream.BufferSource source) {
-    bufferSourceMap.put(source, null);
+    bufferSourceMap.put(source, 1);
   }
 
   public void unregister(DaosShuffleInputStream.BufferSource source) {
@@ -130,12 +118,12 @@ public class DaosReader {
       try {
         if (!cancelled) {
           context.object.fetch(context.desc);
-          context.counter.getAndIncrement();
-          context.signal();
         }
       } catch (IOException e) {
         log.error("failed to read for " + context.desc, e);
       } finally {
+        context.counter.getAndIncrement();
+        context.signal();
         if (cancelled) {
           context.desc.release();
         } else {
@@ -156,21 +144,24 @@ public class DaosReader {
     private final Lock takeLock;
     private final Condition notEmpty;
     private IODataDesc desc;
+    private Tuple2<Integer, Integer> mapReduceId;
     private volatile boolean cancelled; // for multi-thread
     private boolean cancelledByCaller; // for accessing by caller
     private ReadTaskContext next;
 
     public ReadTaskContext(DaosObject object, AtomicInteger counter, Lock takeLock, Condition notEmpty,
-                           IODataDesc desc) {
+                           IODataDesc desc, Tuple2<Integer, Integer> mapReduceId) {
       this.object = object;
       this.counter = counter;
       this.takeLock = takeLock;
       this.notEmpty = notEmpty;
       this.desc = desc;
+      this.mapReduceId = mapReduceId;
     }
 
-    public void reuse(IODataDesc desc) {
+    public void reuse(IODataDesc desc, Tuple2<Integer, Integer> mapReduceId) {
       this.desc = desc;
+      this.mapReduceId = mapReduceId;
       cancelled = false;
       cancelledByCaller = false;
       next = null;
@@ -195,6 +186,10 @@ public class DaosReader {
 
     public IODataDesc getDesc() {
       return desc;
+    }
+
+    public Tuple2<Integer, Integer> getMapReduceId() {
+      return mapReduceId;
     }
 
     public void cancel() {

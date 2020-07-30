@@ -21,7 +21,7 @@
  * portions thereof marked with this legend must also reproduce the markings.
  */
 
-package io.daos.spark;
+package org.apache.spark.shuffle.daos;
 
 import io.daos.BufferAllocator;
 import io.daos.obj.DaosObject;
@@ -87,16 +87,25 @@ public class DaosWriter {
   public long[] getPartitionLens(int numPartitions) {
     long[] lens = new long[numPartitions];
     partitionBufMap.values().stream().sorted().forEach(b -> lens[b.partitionId] = b.totalSize + b.roundSize);
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("partition map size: " + partitionBufMap.size());
+      partitionBufMap.forEach((k, v) -> LOG.info("id: " + k + ", native buffer: " + v.partitionId + ", " +
+          v.totalSize + ", " + v.roundSize));
+    }
+
     return lens;
   }
 
   public void flush(int partitionId) throws IOException {
     NativeBuffer buffer = partitionBufMap.get(partitionId);
+    if (buffer == null) {
+      return;
+    }
     IODataDesc desc = buffer.createUpdateDesc();
     if (desc != null) {
-      if (buffer.totalSize < minSize) {
+      if (buffer.roundSize < minSize) {
         LOG.warn("too small partition size {}, shuffle {}, map {}, partition {}, app {}",
-            buffer.totalSize, shuffleId, mapId, partitionId, appId);
+            buffer.roundSize, shuffleId, mapId, partitionId, appId);
       }
       try {
         object.update(desc);
@@ -178,24 +187,29 @@ public class DaosWriter {
     }
 
     public IODataDesc createUpdateDesc() throws IOException {
-      if (roundSize == 0) {
+      if (roundSize == 0 || bufList.isEmpty()) {
         return null;
       }
       List<IODataDesc.Entry> entries = new ArrayList<>();
-      bufList.forEach(buf -> {
+      long bufSize = 0;
+      for (ByteBuf buf : bufList) {
         try {
           entries.add(
               IODataDesc.createEntryForUpdate(
-              mapId,
-              IODataDesc.IodType.ARRAY,
-              1,
-              (int)totalSize,
-              buf
+                  mapId,
+                  IODataDesc.IodType.ARRAY,
+                  1,
+                  (int) totalSize,
+                  buf
               ));
         } catch (IOException e) {
           throw new RuntimeException("failed to create update entry", e);
         }
-      });
+        bufSize += buf.readableBytes();
+      }
+      if (roundSize != bufSize) {
+        throw new IOException("expect update size: " + roundSize + ", actual: " + bufSize);
+      }
       return object.createDataDescForUpdate(partitionIdKey, entries);
     }
 

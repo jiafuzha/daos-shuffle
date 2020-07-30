@@ -64,7 +64,7 @@ package object daos {
       .doc("Size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
-      .checkValue(v => v > 50 * 1024 * 1024 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
+      .checkValue(v => v > 50 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
         s"The total buffer size must be bigger than 50m and less than or equal to" +
           s" ${ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024}.")
       .createWithDefaultString("800m")
@@ -74,7 +74,7 @@ package object daos {
       .doc("Initial size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
-      .checkValue(v => v > 10 * 1024 * 1024 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
+      .checkValue(v => v > 10 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
         s"The initial total buffer size must be bigger than 10m and less than or equal to" +
           s" ${ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024}.")
       .createWithDefaultString("80m")
@@ -122,7 +122,7 @@ package object daos {
         "cores.")
       .version("3.0.0")
       .intConf
-      .createWithDefault(-1)
+      .createWithDefault(1)
 
   val SHUFFLE_DAOS_READ_BATCH_SIZE =
     ConfigBuilder("spark.shuffle.daos.read.batch")

@@ -23,7 +23,6 @@
 
 package org.apache.spark.shuffle.daos
 
-import io.daos.spark.DaosShuffleIO
 import org.apache.spark.{SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler.MapStatus
@@ -73,6 +72,9 @@ class DaosShuffleWriter[K, V, C](
     partitionsWriter.insertAll(records)
     val partitionLengths = partitionsWriter.commitAll
 
+    if (log.isDebugEnabled()) {
+      log.debug("mapId: " + mapId + ", partition lengths: " + partitionLengths.mkString(", "))
+    }
     mapStatus = MapStatus(blockManager.shuffleServerId, partitionLengths, mapId)
   }
 

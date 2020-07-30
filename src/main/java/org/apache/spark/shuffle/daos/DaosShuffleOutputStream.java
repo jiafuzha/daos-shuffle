@@ -21,7 +21,7 @@
  * portions thereof marked with this legend must also reproduce the markings.
  */
 
-package io.daos.spark;
+package org.apache.spark.shuffle.daos;
 
 import java.io.IOException;
 import java.io.OutputStream;

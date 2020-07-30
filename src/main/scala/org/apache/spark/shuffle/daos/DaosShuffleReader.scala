@@ -23,7 +23,6 @@
 
 package org.apache.spark.shuffle.daos
 
-import io.daos.spark.DaosShuffleIO
 import org.apache.spark.{InterruptibleIterator, MapOutputTracker, SparkEnv, TaskContext}
 import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.serializer.SerializerManager
@@ -39,7 +38,6 @@ class DaosShuffleReader[K, C](
     readMetrics: ShuffleReadMetricsReporter,
     shuffleIO: DaosShuffleIO,
     serializerManager: SerializerManager = SparkEnv.get.serializerManager,
-    partitionId: Int,
     shouldBatchFetch: Boolean = false)
   extends ShuffleReader[K, C] with Logging {
 
@@ -47,7 +45,7 @@ class DaosShuffleReader[K, C](
 
   private val conf = SparkEnv.get.conf
 
-  private val daosReader = shuffleIO.getDaosReader(handle.shuffleId, partitionId);
+  private val daosReader = shuffleIO.getDaosReader(handle.shuffleId);
 
   override def read(): Iterator[Product2[K, C]] = {
     val wrappedStreams = new ShufflePartitionIterator(

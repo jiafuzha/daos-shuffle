@@ -25,8 +25,7 @@ package org.apache.spark.shuffle.daos
 
 import java.util.Comparator
 
-import io.daos.spark.DaosShuffleIO
-import org.apache.spark.internal.{Logging, config}
+import org.apache.spark.internal.Logging
 import org.apache.spark.memory.{MemoryConsumer, TaskMemoryManager}
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.util.Utils
@@ -118,6 +117,7 @@ class MapPartitionsBuffer[K, V, C](
 
   def commitAll: Array[Long] = {
     writeBuffer.flushAll
+    writeBuffer.close
     daosWriter.getPartitionLens(numPartitions)
   }
 
@@ -126,7 +126,6 @@ class MapPartitionsBuffer[K, V, C](
     Utils.tryWithSafeFinally {
       writeBuffer.close
     } {
-      // write rest of data to DAOS
       daosWriter.close
     }
   }
@@ -287,10 +286,12 @@ class MapPartitionsBuffer[K, V, C](
     def flushAll: Unit = {
       val buffer = if (comparator.isDefined) partitionMap else partitionBuffer
       buffer.foreach(e => e._2.writeAndFlush)
+
     }
 
     def close: Unit = {
       val buffer = if (comparator.isDefined) partitionMap else partitionBuffer
+      buffer.foreach(b => b._2.close)
       buffer.clear()
     }
 
@@ -334,7 +335,7 @@ class MapPartitionsBuffer[K, V, C](
     }
 
     private def writeAndFlush(memory: Long): Unit = {
-      val writer = _pairsWriter
+      val writer = if (_pairsWriter != null) _pairsWriter else pairsWriter
       var count = 0
       iterator.foreach(p => {
         writer.write(p._1, p._2)
@@ -369,6 +370,13 @@ class MapPartitionsBuffer[K, V, C](
       } else {
         updateTotalSize(estSize)
         estSize
+      }
+    }
+
+    def close: Unit = {
+      if (_pairsWriter != null) {
+        _pairsWriter.close
+        _pairsWriter = null
       }
     }
   }

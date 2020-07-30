@@ -3,9 +3,8 @@ package org.apache.spark.shuffle.daos
 import java.io.{IOException, InputStream}
 import java.util
 
-import io.daos.spark.{DaosReader, DaosShuffleInputStream}
 import org.apache.commons.io.IOUtils
-import org.apache.spark.{SparkEnv, SparkException, TaskContext}
+import org.apache.spark.{SparkException, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle.{FetchFailedException, ShuffleReadMetricsReporter}
 import org.apache.spark.storage.{BlockId, BlockManagerId, ShuffleBlockBatchId, ShuffleBlockId}
@@ -25,7 +24,7 @@ class ShufflePartitionIterator(
 
   private var lastBlockId: ShuffleBlockId = null
 
-  private var inputStream: DaosShuffleInputStream = null
+  private[daos] var inputStream: DaosShuffleInputStream = null
 
   private var done = false
 
@@ -38,17 +37,28 @@ class ShufflePartitionIterator(
     startReading
   }
 
-  def startReading: Unit = {
-    val javaMap = new util.LinkedHashMap[Integer, (java.lang.Long, BlockId, BlockManagerId)]()
+  private def getReduceId(shuffleBlockId: ShuffleBlockId): Int = {
+    val name = shuffleBlockId.name
+    name.substring(name.lastIndexOf('_') + 1).toInt
+  }
+
+  private def startReading: Unit = {
+    // (mapid, reduceid) -> (length, BlockId, BlockManagerId)
+    val javaMap = new util.LinkedHashMap[(Integer, Integer), (java.lang.Long, BlockId, BlockManagerId)]()
     blocksByAddress.foreach(t2 => {
       t2._2.foreach(t3 => {
         if (javaMap.containsKey(t3._3)) {
           throw new IllegalStateException("duplicate map id: " + t3._3)
         }
-        javaMap.put(t3._3, t3._2)
+        javaMap.put((t3._3, getReduceId(t3._1.asInstanceOf[ShuffleBlockId])), (t3._2, t3._1, t2._1))
         lastBlockId = t3._1.asInstanceOf[ShuffleBlockId]
       })
     })
+
+    if (log.isDebugEnabled) {
+      log.debug(s"total mapreduceId: ${javaMap.size()}, they are, ")
+      javaMap.forEach((key, value) => logDebug(key.toString() + " = " + value.toString))
+    }
 
     inputStream = new DaosShuffleInputStream(daosReader, javaMap,
       maxBytesInFlight, maxReqSizeShuffleToMem, shuffleMetrics)
@@ -66,10 +76,10 @@ class ShufflePartitionIterator(
     var input: InputStream = null
     var streamCompressedOrEncryptd = false
     try {
-      streamWrapper(lastBlockId, inputStream)
+      input = streamWrapper(lastBlockId, inputStream)
       streamCompressedOrEncryptd = !input.eq(inputStream)
       if (streamCompressedOrEncryptd && detectCorruptUseExtraMemory) {
-        input = Utils.copyStreamUpTo(input, maxBytesInFlight / 3);
+        input = Utils.copyStreamUpTo(input, maxBytesInFlight / 3)
       }
     } catch {
       case e: IOException =>
@@ -77,9 +87,11 @@ class ShufflePartitionIterator(
           s"${inputStream.getCurOriginAddress}.", e)
         throw e
     } finally {
-      inputStream.close()
+      if (input == null) {
+        inputStream.close()
+      }
     }
-    (lastBlockId, new BufferReleasingInputStream(inputStream, this,
+    (lastBlockId, new BufferReleasingInputStream(input, this,
       detectCorrupt && streamCompressedOrEncryptd))
   }
 
@@ -107,6 +119,7 @@ class ShufflePartitionIterator(
   def cleanup: Unit = {
     if (inputStream != null) {
       inputStream.close()
+      inputStream = null;
     }
   }
 
@@ -118,7 +131,7 @@ class ShufflePartitionIterator(
  */
 private class BufferReleasingInputStream(
                                           // This is visible for testing
-                                          private val delegate: DaosShuffleInputStream,
+                                          private val delegate: InputStream,
                                           private val iterator: ShufflePartitionIterator,
                                           private val detectCorruption: Boolean)
   extends InputStream {
@@ -130,8 +143,9 @@ private class BufferReleasingInputStream(
     } catch {
       case e: IOException if detectCorruption =>
         IOUtils.closeQuietly(this)
-        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
-          delegate.getCurOriginAddress, e)
+        val dinput = iterator.inputStream
+        iterator.throwFetchFailedException(dinput.getCurBlockId, dinput.getCurMapIndex,
+          dinput.getCurOriginAddress, e)
     }
   }
 
@@ -152,8 +166,9 @@ private class BufferReleasingInputStream(
     } catch {
       case e: IOException if detectCorruption =>
         IOUtils.closeQuietly(this)
-        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
-          delegate.getCurOriginAddress, e)
+        val dinput = iterator.inputStream
+        iterator.throwFetchFailedException(dinput.getCurBlockId, dinput.getCurMapIndex,
+          dinput.getCurOriginAddress, e)
     }
   }
 
@@ -165,8 +180,9 @@ private class BufferReleasingInputStream(
     } catch {
       case e: IOException if detectCorruption =>
         IOUtils.closeQuietly(this)
-        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
-          delegate.getCurOriginAddress, e)
+        val dinput = iterator.inputStream
+        iterator.throwFetchFailedException(dinput.getCurBlockId, dinput.getCurMapIndex,
+          dinput.getCurOriginAddress, e)
     }
   }
 
@@ -176,8 +192,9 @@ private class BufferReleasingInputStream(
     } catch {
       case e: IOException if detectCorruption =>
         IOUtils.closeQuietly(this)
-        iterator.throwFetchFailedException(delegate.getCurBlockId, delegate.getCurMapIndex,
-          delegate.getCurOriginAddress, e)
+        val dinput = iterator.inputStream
+        iterator.throwFetchFailedException(dinput.getCurBlockId, dinput.getCurMapIndex,
+          dinput.getCurOriginAddress, e)
     }
   }
 

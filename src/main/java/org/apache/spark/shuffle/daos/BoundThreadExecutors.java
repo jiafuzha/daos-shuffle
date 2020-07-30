@@ -21,9 +21,8 @@
  * portions thereof marked with this legend must also reproduce the markings.
  */
 
-package io.daos.spark;
+package org.apache.spark.shuffle.daos;
 
-import org.apache.spark.TaskContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,7 +38,7 @@ public class BoundThreadExecutors {
 
   private final String name;
 
-  private volatile SingleThreadExecutor[] executors;
+  private final SingleThreadExecutor[] executors;
 
   private AtomicInteger idx = new AtomicInteger(0);
 
@@ -57,34 +56,41 @@ public class BoundThreadExecutors {
     this.name = name;
     this.threads = threads;
     this.threadFactory = threadFactory;
+    this.executors = new SingleThreadExecutor[threads];
   }
 
-  public void initialize() {
-    executors = new SingleThreadExecutor[threads];
-  }
-
-  public Executor nextExecutor() {
-    SingleThreadExecutor executor = executors[idx.getAndIncrement()%threads];
+  public SingleThreadExecutor nextExecutor() {
+    int i = idx.getAndIncrement()%threads;
+    SingleThreadExecutor executor = executors[i];
+    if (executor == null) {
+      synchronized (this) {
+        executor = new SingleThreadExecutor(threadFactory);
+        executors[i] = executor;
+      }
+    }
     executor.startThread();
     return executor;
   }
 
   public void stop() {
     for (SingleThreadExecutor executor : executors) {
-      executor.interrupt();
+      if (executor != null) {
+        executor.interrupt();
+      }
     }
     boolean allStopped;
     int count = 0;
     while (true) {
       allStopped = true;
       for (SingleThreadExecutor executor : executors) {
-        allStopped &= (executor.state.get() == STOPPED);
+        if (executor != null) {
+          allStopped &= (executor.state.get() == STOPPED);
+        }
       }
       if (allStopped) {
         break;
       }
       if (count >= 5) {
-
         break;
       }
       try {
@@ -95,14 +101,17 @@ public class BoundThreadExecutors {
       }
       count++;
     }
-    executors = null;
+    for (int i = 0; i < executors.length; i++) {
+      executors[i] = null;
+    }
   }
 
-  public static class SingleThreadExecutor {
+  public static class SingleThreadExecutor implements Executor {
     private Thread thread;
     private String name;
     private AtomicInteger state = new AtomicInteger(0);
     private BlockingQueue<Runnable> queue = new LinkedBlockingDeque<>();
+    // TODO: handle task failure and restart of thread
     private Runnable parentTask = () -> {
       Runnable runnable;
       try {
@@ -137,16 +146,13 @@ public class BoundThreadExecutors {
       queue = null;
     }
 
-    public void submit(TaskContext runnable) {
+    @Override
+    public void execute(Runnable runnable) {
       try {
         queue.put(runnable);
       } catch (InterruptedException e) {
         throw new RuntimeException("cannot add task to thread " + thread.getName(), e);
       }
-    }
-
-    public boolean remove(Runnable runnable) {
-      return queue.remove(runnable);
     }
 
     private void startThread() {
@@ -155,7 +161,7 @@ public class BoundThreadExecutors {
           try {
             thread.start();
           } finally {
-            if (state.compareAndSet(STARTING, STARTED)) {
+            if (!state.compareAndSet(STARTING, STARTED)) {
               throw new IllegalStateException("failed to start thread " + thread.getName());
             }
           }

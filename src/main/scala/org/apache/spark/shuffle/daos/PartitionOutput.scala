@@ -25,7 +25,6 @@ package org.apache.spark.shuffle.daos
 
 import java.io.OutputStream
 
-import io.daos.spark.{DaosShuffleOutputStream, DaosWriter}
 import org.apache.spark.serializer.{SerializationStream, SerializerInstance, SerializerManager}
 import org.apache.spark.shuffle.ShuffleWriteMetricsReporter
 import org.apache.spark.storage.{ShuffleBlockId, TimeTrackingOutputStream}

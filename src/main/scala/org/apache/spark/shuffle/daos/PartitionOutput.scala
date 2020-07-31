@@ -84,6 +84,7 @@ class PartitionOutput(
   def flush: Unit = {
     if (opened) {
       objOut.flush()
+      daosWriter.flush(partitionId)
       updateWrittenBytes
     }
   }
@@ -91,8 +92,8 @@ class PartitionOutput(
   def close: Unit = {
     if (opened) {
       Utils.tryWithSafeFinally {
-        flush
         objOut.close()
+        daosWriter.flush(partitionId)
       } {
         objOut = null
         bs = null

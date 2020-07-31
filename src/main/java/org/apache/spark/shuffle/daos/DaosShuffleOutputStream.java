@@ -61,7 +61,7 @@ public class DaosShuffleOutputStream extends OutputStream {
 
   @Override
   public void flush() throws IOException {
-    daosWriter.flush(partitionId);
+    // do nothing since we want to control the actual DAOS write, no objectoutputstream/kryo
   }
 
   public long getWrittenBytes() {

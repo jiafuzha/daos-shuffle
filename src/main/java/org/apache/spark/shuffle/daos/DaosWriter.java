@@ -86,7 +86,12 @@ public class DaosWriter {
 
   public long[] getPartitionLens(int numPartitions) {
     long[] lens = new long[numPartitions];
-    partitionBufMap.values().stream().sorted().forEach(b -> lens[b.partitionId] = b.totalSize + b.roundSize);
+    partitionBufMap.values().stream().sorted().forEach(b -> {
+      lens[b.partitionId] = b.totalSize;
+      if (b.roundSize != 0) {
+        throw new IllegalStateException("round size should be 0, " + b.roundSize);
+      }
+    });
     if (LOG.isDebugEnabled()) {
       LOG.debug("partition map size: " + partitionBufMap.size());
       partitionBufMap.forEach((k, v) -> LOG.info("id: " + k + ", native buffer: " + v.partitionId + ", " +
@@ -159,12 +164,10 @@ public class DaosWriter {
 
     public void write(int b) {
       ByteBuf buf = getBuffer(1);
-      if (buf.writableBytes() >= 1) {
-        buf.writeByte(b);
-      } else {
+      if (buf.writableBytes() < 1) {
         buf = addNewByteBuf(1);
-        buf.writeByte(b);
       }
+      buf.writeByte(b);
       roundSize += 1;
     }
 

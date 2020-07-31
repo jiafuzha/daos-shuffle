@@ -136,9 +136,7 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
     daosShuffleIO.removeShuffle(shuffleId)
   }
 
-  override def shuffleBlockResolver
-
-    = null
+  override def shuffleBlockResolver = null
 
   override def stop(): Unit = {
     daosShuffleIO.close()

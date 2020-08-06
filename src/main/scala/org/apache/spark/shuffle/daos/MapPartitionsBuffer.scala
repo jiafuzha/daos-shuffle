@@ -190,7 +190,7 @@ class MapPartitionsBuffer[K, V, C](
         totalBufferInitial, taskMemManager, this)
       if (comparator.isDefined) {
         (0 until numPartitions).foreach(i => {
-          val map = new SizeAwareMap[K, C](i, partBufferThreshold, taskMemManager, this)
+          val map = new SizeAwareMap[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
           partitionMap += (i -> map)
           if (i > 0) {
             val prevMap = partitionMap(i - 1)
@@ -200,7 +200,7 @@ class MapPartitionsBuffer[K, V, C](
         })
       } else {
         (0 until numPartitions).foreach(i => {
-          val buffer = new SizeAwareBuffer[K, C](i, partBufferThreshold, taskMemManager, this)
+          val buffer = new SizeAwareBuffer[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
           partitionBuffer += (i -> buffer)
           if (i > 0) {
             val prevBuffer = partitionBuffer(i - 1)

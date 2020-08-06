@@ -12,6 +12,7 @@
         <java.version>1.8</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
+        <spark.version>3.0.0</spark.version>
     </properties>
 
     <build>
@@ -62,6 +63,7 @@
                     </execution>
                     <execution>
                         <id>scala-test-compile-first</id>
+                        <phase>process-test-resources</phase>
                         <goals>
                             <goal>testCompile</goal>
                         </goals>
@@ -75,11 +77,10 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <scalaVersion>2.12.10</scalaVersion>
+                    <scalaVersion>2.12.3</scalaVersion>
                     <checkMultipleScalaVersions>true</checkMultipleScalaVersions>
                     <failOnMultipleScalaVersions>true</failOnMultipleScalaVersions>
                     <recompileMode>incremental</recompileMode>
-                    <useZincServer>true</useZincServer>
                     <args>
                         <arg>-unchecked</arg>
                         <arg>-deprecation</arg>
@@ -118,14 +119,37 @@
                     <target>${java.version}</target>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.7</version>
+            </plugin>
+            <plugin>
+                <groupId>org.scalatest</groupId>
+                <artifactId>scalatest-maven-plugin</artifactId>
+                <version>2.0.0</version>
+                <executions>
+                    <execution>
+                        <id>test</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
     <dependencies>
         <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>2.12.3</version>
+        </dependency>
+        <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-core_2.12</artifactId>
-            <version>3.0.0</version>
+            <version>${spark.version}</version>
         </dependency>
         <dependency>
             <groupId>io.daos</groupId>
@@ -139,7 +163,38 @@
             <version>4.11</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.scalatest</groupId>
+            <artifactId>scalatest_2.12</artifactId>
+            <version>3.0.8</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-core_2.12</artifactId>
+            <version>${spark.version}</version>
+            <classifier>tests</classifier>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>2.23.4</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.powermock</groupId>
+            <artifactId>powermock-module-junit4</artifactId>
+            <version>2.0.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.powermock</groupId>
+            <artifactId>powermock-api-mockito2</artifactId>
+            <version>2.0.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-
 
 </project>

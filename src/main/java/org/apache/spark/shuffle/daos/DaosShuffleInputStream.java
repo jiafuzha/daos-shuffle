@@ -59,9 +59,11 @@ public class DaosShuffleInputStream extends InputStream {
 
   private ShuffleReadMetricsReporter metrics;
 
-  private boolean fromOtherThread = true;
+  private boolean fromOtherThread;
 
   private boolean cleaned;
+
+  private boolean completed;
 
   // ensure the order of partition
   private LinkedHashMap<Tuple2<Integer, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap;
@@ -79,9 +81,12 @@ public class DaosShuffleInputStream extends InputStream {
     this.reader = reader;
     this.source = new BufferSource();
     reader.register(source);
-    this.executor = reader.nextReaderExecutor();
-    this.object = reader.getObject();
     this.config = new ReaderConfig(maxBytesInFlight, maxMem);
+    this.fromOtherThread = config.fromOtherThread;
+    if (fromOtherThread) {
+      this.executor = reader.nextReaderExecutor();
+    }
+    this.object = reader.getObject();
     this.metrics = metrics;
     this.mapIdIt = partSizeMap.keySet().iterator();
   }
@@ -101,6 +106,9 @@ public class DaosShuffleInputStream extends InputStream {
   }
 
   public int getCurMapIndex() {
+    if (source.lastMapReduceIdForSubmit == null) {
+      return -1;
+    }
     return source.lastMapReduceIdForSubmit._1;
   }
 
@@ -109,10 +117,12 @@ public class DaosShuffleInputStream extends InputStream {
     while (true) {
       ByteBuf buf = source.nextBuf();
       if (buf == null) { // reach end
-        return completeAndCleanup();
+        return complete();
+      }
+      if (source.newMap) { // indication to close upper layer object inputstream
+        return -1;
       }
       if (buf.readableBytes() >= 1) {
-        metrics.incRemoteBytesRead(1);
         return buf.readByte();
       }
     }
@@ -121,7 +131,6 @@ public class DaosShuffleInputStream extends InputStream {
   @Override
   public int read(byte[] bytes) throws IOException {
     int len = read(bytes, 0, bytes.length);
-    metrics.incRemoteBytesRead(len);
     return len;
   }
 
@@ -131,11 +140,13 @@ public class DaosShuffleInputStream extends InputStream {
     while (true) {
       ByteBuf buf = source.nextBuf();
       if (buf == null) { // reach end
-        return completeAndCleanup();
+        return complete();
+      }
+      if (source.newMap) { // indication to close upper layer object inputstream
+        return -1;
       }
       if (len <= buf.readableBytes()) {
         buf.readBytes(bytes, offset, len);
-        metrics.incRemoteBytesRead(length);
         return length;
       }
       int maxRead = buf.readableBytes();
@@ -145,9 +156,17 @@ public class DaosShuffleInputStream extends InputStream {
     }
   }
 
-  private int completeAndCleanup() throws IOException {
+  /**
+   * upper layer should call this method to read more map output
+   */
+  public void nextMap() {
+    source.newMap = false;
+  }
+
+  private int complete() throws IOException {
     source.checkPartitionSize();
     source.checkTotalPartitions();
+    completed = true;
     return -1;
   }
 
@@ -159,12 +178,31 @@ public class DaosShuffleInputStream extends InputStream {
       }
       source = null;
       cleaned = true;
+      completed = true;
     }
   }
 
+  /**
+   * no actual close if it's not completed yet.
+   */
   @Override
   public void close() {
-    cleanup();
+    close(false);
+  }
+
+  /**
+   * force close stream when task is competed or error is occurred.
+   *
+   * @param force
+   */
+  public void close(boolean force) {
+    if (force || completed) {
+      cleanup();
+    }
+  }
+
+  public boolean isCompleted() {
+    return completed;
   }
 
   public class BufferSource {
@@ -181,6 +219,7 @@ public class DaosShuffleInputStream extends InputStream {
     private Tuple2<Integer, Integer> lastMapReduceIdForSubmit;
     private Tuple2<Integer, Integer> lastMapReduceIdForReturn;
     private int curOffset;
+    private boolean newMap;
 
     private Lock takeLock = new ReentrantLock();
     private Condition notEmpty = takeLock.newCondition();
@@ -234,13 +273,6 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     private ByteBuf tryNextTaskContext() throws IOException {
-      if (partsRead == totalParts) { // all partitions are read
-        return null;
-      }
-      if (partsRead > totalParts) {
-        throw new IllegalStateException("partsRead (" + partsRead + ") should not be bigger than totalParts (" +
-            totalParts + ")");
-      }
       try {
         IODataDesc desc;
         if ((desc = tryGetFromOtherThread()) != null) {
@@ -262,29 +294,34 @@ public class DaosShuffleInputStream extends InputStream {
      */
     private ByteBuf readDuplicated() throws IOException {
       // in case no even single return from other thread
-      if (currentCtx == null) {
-        currentCtx = headCtx;
+      DaosReader.ReadTaskContext context = currentCtx;
+      if (context == null) {
+        context = headCtx;
       } else {
         lastMapReduceIdForReturn = currentCtx.getMapReduceId();
         // no consumedStack push and no totalInMemSize and totalSubmitted update
         // since they will be updated when the task context finally returned
-        currentCtx = currentCtx.getNext();
-        if (currentCtx == null) {
+        context = currentCtx.getNext();
+        if (context == null) {
           if (!fromOtherThread) {
             lastCtx = null;
           }
           return null;
         }
       }
-      IODataDesc newDesc = currentCtx.getDesc().duplicate();
-      return getBySelf(newDesc, currentCtx.getMapReduceId());
+      IODataDesc newDesc = context.getDesc().duplicate();
+      return getBySelf(newDesc, context.getMapReduceId());
     }
 
     /* put last task context to consumedStack */
     private IODataDesc tryGetFromOtherThread() throws InterruptedException, IOException {
-      IODataDesc desc = tryGetValidReady();
+      IODataDesc desc = tryGetValidReady(true);
       if (desc != null) {
         return desc;
+      }
+      // check completion
+      if ((!mapIdIt.hasNext()) && curMapReduceId == null && totalSubmitted == 0) {
+        return null;
       }
       // wait for specified time
       desc = waitForValidFromOtherThread();
@@ -295,11 +332,11 @@ public class DaosShuffleInputStream extends InputStream {
       boolean cancelAll = false;
       if (exceedWaitTimes >= config.waitTimeoutTimes) {
         fromOtherThread = false;
-        log.info("stop reading from dedicated read thread");
+        log.warn("stop reading from dedicated read thread");
         cancelAll = true;
       } else {
         // try again
-        desc = tryGetValidReady();
+        desc = tryGetValidReady(true);
         if (desc != null) {
           return desc;
         }
@@ -329,11 +366,7 @@ public class DaosShuffleInputStream extends InputStream {
           return null;
         }
         // get some results after wait
-        int c = counter.getAndDecrement();
-        if (c < 0) {
-          throw new IllegalStateException("counter should be non-negative, " + c);
-        }
-        desc = tryGetValidReady();
+        desc = tryGetValidReady(false);
         if (desc != null) {
           return desc;
         }
@@ -344,6 +377,11 @@ public class DaosShuffleInputStream extends InputStream {
       DaosReader.ReadTaskContext ctx = currentCtx;
       if (ctx == null) {
         ctx = headCtx;
+      } else {
+        ctx = currentCtx.getNext();
+      }
+      if (ctx == null) { // reach to end
+        return;
       }
       ctx.cancel();
       if (cancelAll) {
@@ -355,12 +393,20 @@ public class DaosShuffleInputStream extends InputStream {
       }
     }
 
-    private IODataDesc tryGetValidReady() throws IOException {
-      while (counter.get() > 0) {
-        counter.getAndDecrement();
+    private IODataDesc tryGetValidReady(boolean restore) throws IOException {
+      int c;
+      while ((c = counter.decrementAndGet()) >= 0) {
         IODataDesc desc = moveToNextDesc();
+        restore = true; // we got at least one. Thus, we need to restore negative value.
         if (desc != null) {
           return desc;
+        }
+      }
+      if (c < 0) {
+        if (restore) {
+          counter.incrementAndGet();
+        } else {
+          throw new IllegalStateException("counter should be non-negative, " + c);
         }
       }
       return null;
@@ -369,18 +415,17 @@ public class DaosShuffleInputStream extends InputStream {
     private IODataDesc moveToNextDesc() throws IOException {
       if (currentCtx != null) {
         lastMapReduceIdForReturn = currentCtx.getMapReduceId();
-        consumedStack.push(currentCtx);
+        consumedStack.offer(currentCtx);
         totalInMemSize -= currentCtx.getDesc().getTotalRequestSize();
-        totalSubmitted -= 1;
         currentCtx = currentCtx.getNext();
       } else { // returned first time
         currentCtx = headCtx;
       }
+      totalSubmitted -= 1;
       IODataDesc desc = validateReturnedTaskContext(currentCtx);
       if (desc == null) {
         return null;
       }
-      metrics.incRemoteBlocksFetched(1);
       currentDesc = desc;
       return currentDesc;
     }
@@ -388,7 +433,7 @@ public class DaosShuffleInputStream extends InputStream {
     private ByteBuf tryCurrentDesc() throws IOException {
       if (currentDesc != null) {
         ByteBuf buf;
-        while (entryIdx < currentDesc.numberOfEntries()) {
+        while (entryIdx < currentDesc.getNbrOfEntries()) {
           IODataDesc.Entry entry = currentDesc.getEntry(entryIdx);
           buf = validateLastEntryAndGetBuf(entry);
           if (buf.readableBytes() > 0) {
@@ -406,7 +451,7 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     private ByteBuf tryCurrentEntry() {
-      if (currentEntry != null) {
+      if (currentEntry != null && !currentEntry.isFetchBufReleased()) {
         ByteBuf buf = currentEntry.getFetchedData();
         if (buf.readableBytes() > 0) {
           return buf;
@@ -460,7 +505,7 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     private DaosReader.ReadTaskContext tryReuseContext(IODataDesc desc) {
-      DaosReader.ReadTaskContext context = consumedStack.pop();
+      DaosReader.ReadTaskContext context = consumedStack.poll();
       if (context != null) {
         context.reuse(desc, lastMapReduceIdForSubmit);
       } else {
@@ -484,7 +529,6 @@ public class DaosShuffleInputStream extends InputStream {
       boolean releaseBuf = false;
       try {
         object.fetch(desc);
-        metrics.incRemoteBlocksFetched(1);
         currentDesc = desc;
         ByteBuf buf = validateLastEntryAndGetBuf(desc.getEntry(entryIdx));
         lastMapReduceIdForReturn = mapreduceId;
@@ -552,10 +596,6 @@ public class DaosShuffleInputStream extends InputStream {
     private IODataDesc validateReturnedTaskContext(DaosReader.ReadTaskContext context)
         throws IOException {
       if (context.isCancelled()) {
-        // no more release here since it's released in ReadTask already when it's cancelled.
-        consumedStack.push(context);
-        totalInMemSize -= currentCtx.getDesc().getTotalRequestSize();
-        totalSubmitted -= 1;
         return null;
       }
       IODataDesc desc = context.getDesc();
@@ -572,15 +612,19 @@ public class DaosShuffleInputStream extends InputStream {
 
     private ByteBuf validateLastEntryAndGetBuf(IODataDesc.Entry entry) throws IOException {
       ByteBuf buf = entry.getFetchedData();
+      int byteLen = buf.readableBytes();
+      newMap = false;
       if (currentEntry != null && entry != currentEntry) {
         if (entry.getKey().equals(currentEntry.getKey())) {
-          currentPartSize += buf.readableBytes();
+          currentPartSize += byteLen;
         } else {
           checkPartitionSize();
-          currentPartSize = buf.readableBytes();
+          newMap = true;
+          currentPartSize = byteLen;
         }
       }
       currentEntry = entry;
+      metrics.incRemoteBytesRead(byteLen);
       return buf;
     }
 
@@ -594,6 +638,7 @@ public class DaosShuffleInputStream extends InputStream {
         throw new IOException("expect partition size " + partSizeMap.get(lastMapReduceIdForReturn) +
             ", actual size " + currentPartSize + ", mapId and reduceId: " + lastMapReduceIdForReturn);
       }
+      metrics.incRemoteBlocksFetched(1);
     }
 
     public boolean cleanup(boolean force) {
@@ -642,10 +687,11 @@ public class DaosShuffleInputStream extends InputStream {
     private int readBatchSize;
     private int waitDataTimeMs;
     private int waitTimeoutTimes;
+    private boolean fromOtherThread;
 
     private ReaderConfig(long maxBytesInFlight, long maxMem) {
       SparkConf conf = SparkEnv.get().conf();
-      minReadSize = (long)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_MINIMUM_SIZE()) * 1024 * 1024;
+      minReadSize = (long)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_MINIMUM_SIZE()) * 1024;
       if (maxBytesInFlight < minReadSize) {
         this.maxBytesInFlight = minReadSize;
       } else {
@@ -655,7 +701,16 @@ public class DaosShuffleInputStream extends InputStream {
       this.readBatchSize = (int)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_BATCH_SIZE());
       this.waitDataTimeMs = (int)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_WAIT_DATA_MS());
       this.waitTimeoutTimes = (int)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_WAIT_DATA_TIMEOUT_TIMES());
+      this.fromOtherThread = (boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
+      if (log.isDebugEnabled()) {
+        log.debug("minReadSize: " + minReadSize);
+        log.debug("maxBytesInFlight: " + maxBytesInFlight);
+        log.debug("maxMem: " + maxMem);
+        log.debug("readBatchSize: " + readBatchSize);
+        log.debug("waitDataTimeMs: " + waitDataTimeMs);
+        log.debug("waitTimeoutTimes: " + waitTimeoutTimes);
+        log.debug("fromOtherThread: " + fromOtherThread);
+      }
     }
-
   }
 }

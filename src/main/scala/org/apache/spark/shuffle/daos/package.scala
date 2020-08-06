@@ -109,12 +109,21 @@ package object daos {
 
   val SHUFFLE_DAOS_READ_MINIMUM_SIZE =
     ConfigBuilder("spark.shuffle.daos.read.minimum")
-      .doc("minimum size when read from DAOS, in MiB. ")
+      .doc("minimum size when read from DAOS, in KiB. ")
       .version("3.0.0")
-      .bytesConf(ByteUnit.MiB)
+      .bytesConf(ByteUnit.KiB)
       .checkValue(v => v > 0,
         s"The DAOS read minimum size must be positive")
-      .createWithDefaultString("2m")
+      .createWithDefaultString("2048k")
+
+  val SHUFFLE_DAOS_READ_MAX_BYTES_IN_FLIGHT =
+    ConfigBuilder("spark.shuffle.daos.read.maxbytes.inflight")
+      .doc("maximum size of requested data when read from DAOS, in KiB. ")
+      .version("3.0.0")
+      .bytesConf(ByteUnit.KiB)
+      .checkValue(v => v > 0,
+        s"The DAOS read max bytes in flight must be positive")
+      .createWithDefaultString("10240k")
 
   val SHUFFLE_DAOS_READ_THREADS =
     ConfigBuilder("spark.shuffle.daos.read.threads")
@@ -126,7 +135,7 @@ package object daos {
 
   val SHUFFLE_DAOS_READ_BATCH_SIZE =
     ConfigBuilder("spark.shuffle.daos.read.batch")
-      .doc("number of read task to submit at each time")
+      .doc("number of read tasks to submit at each time")
       .version("3.0.0")
       .intConf
       .checkValue(v => v > 0,
@@ -150,5 +159,12 @@ package object daos {
       .intConf
       .checkValue(v => v > 0,
         s"wait data timeout times must be positive")
-      .createWithDefault(10)
+      .createWithDefault(5)
+
+  val SHUFFLE_DAOS_READ_FROM_OTHER_THREAD =
+    ConfigBuilder("spark.shuffle.daos.read.from.other.threads")
+      .doc("whether read shuffled data from other threads or not. true by default")
+      .version("3.0.0")
+      .booleanConf
+      .createWithDefault(true)
 }

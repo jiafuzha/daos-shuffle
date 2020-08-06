@@ -93,13 +93,17 @@ class PartitionOutput(
     if (opened) {
       Utils.tryWithSafeFinally {
         objOut.close()
-        daosWriter.flush(partitionId)
       } {
-        objOut = null
-        bs = null
-        ds = null
-        ts = null
-        opened = false
+        Utils.tryWithSafeFinally {
+          daosWriter.flush(partitionId)
+        } {
+          updateWrittenBytes
+          objOut = null
+          bs = null
+          ds = null
+          ts = null
+          opened = false
+        }
       }
     }
   }

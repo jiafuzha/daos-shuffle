@@ -48,13 +48,21 @@ public class DaosReader {
 
   private static SparkConf conf = SparkEnv.get().conf();
 
+  private static boolean fromOtherThread = (boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
+
   private static int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS().key(),
       conf.getInt(SparkLauncher.EXECUTOR_CORES, 1));
 
+  private static BoundThreadExecutors executors;
+
   private static Logger logger = LoggerFactory.getLogger(DaosReader.class);
 
-  private static BoundThreadExecutors executors = new BoundThreadExecutors("read_executors", threads,
-      new ReadThreadFactory());
+  static {
+    if (fromOtherThread) {
+      executors = new BoundThreadExecutors("read_executors", threads,
+          new ReadThreadFactory());
+    }
+  }
 
   public DaosReader(DaosObject object) {
     this.object = object;
@@ -65,7 +73,10 @@ public class DaosReader {
   }
 
   public BoundThreadExecutors.SingleThreadExecutor nextReaderExecutor() {
-    return executors.nextExecutor();
+    if (fromOtherThread) {
+      return executors.nextExecutor();
+    }
+    return null;
   }
 
   public void close() throws IOException {
@@ -76,7 +87,9 @@ public class DaosReader {
   }
 
   public static void stopExecutor() {
-    executors.stop();
+    if (fromOtherThread) {
+      executors.stop();
+    }
   }
 
   @Override
@@ -119,16 +132,12 @@ public class DaosReader {
         if (!cancelled) {
           context.object.fetch(context.desc);
         }
-      } catch (IOException e) {
+      } catch (Exception e) {
         log.error("failed to read for " + context.desc, e);
       } finally {
         context.counter.getAndIncrement();
         context.signal();
-        if (cancelled) {
-          context.desc.release();
-        } else {
-          context.desc.release(false);
-        }
+        context.desc.release(cancelled);
         context = null;
         handle.recycle(this);
       }
@@ -175,6 +184,10 @@ public class DaosReader {
       return next;
     }
 
+    public IODataDesc getDesc() {
+      return desc;
+    }
+
     public void signal() {
       takeLock.lock();
       try {
@@ -184,10 +197,6 @@ public class DaosReader {
       }
     }
 
-    public IODataDesc getDesc() {
-      return desc;
-    }
-
     public Tuple2<Integer, Integer> getMapReduceId() {
       return mapReduceId;
     }
@@ -195,7 +204,6 @@ public class DaosReader {
     public void cancel() {
       cancelled = true;
       cancelledByCaller = true;
-      next = null;
     }
 
     public boolean isCancelled() {

@@ -26,10 +26,7 @@ package org.apache.spark.shuffle.daos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Executor;
-import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class BoundThreadExecutors {
@@ -110,7 +107,7 @@ public class BoundThreadExecutors {
     private Thread thread;
     private String name;
     private AtomicInteger state = new AtomicInteger(0);
-    private BlockingQueue<Runnable> queue = new LinkedBlockingDeque<>();
+    private BlockingQueue<Runnable> queue = new LinkedBlockingQueue<>();
     // TODO: handle task failure and restart of thread
     private Runnable parentTask = () -> {
       Runnable runnable;

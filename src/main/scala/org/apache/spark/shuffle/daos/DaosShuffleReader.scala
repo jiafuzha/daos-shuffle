@@ -23,13 +23,13 @@
 
 package org.apache.spark.shuffle.daos
 
-import org.apache.spark.{InterruptibleIterator, MapOutputTracker, SparkEnv, TaskContext}
 import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.serializer.SerializerManager
 import org.apache.spark.shuffle.{BaseShuffleHandle, ShuffleReadMetricsReporter, ShuffleReader}
-import org.apache.spark.storage.{BlockId, BlockManager, BlockManagerId}
+import org.apache.spark.storage.{BlockId, BlockManagerId}
 import org.apache.spark.util.CompletionIterator
 import org.apache.spark.util.collection.ExternalSorter
+import org.apache.spark.{InterruptibleIterator, SparkEnv, TaskContext}
 
 class DaosShuffleReader[K, C](
     handle: BaseShuffleHandle[K, _, C],
@@ -48,11 +48,12 @@ class DaosShuffleReader[K, C](
   private val daosReader = shuffleIO.getDaosReader(handle.shuffleId);
 
   override def read(): Iterator[Product2[K, C]] = {
+    val maxBytesInFlight = conf.get(SHUFFLE_DAOS_READ_MAX_BYTES_IN_FLIGHT)
     val wrappedStreams = new ShufflePartitionIterator(
       context,
       blocksByAddress,
       serializerManager.wrapStream,
-      conf.get(config.REDUCER_MAX_SIZE_IN_FLIGHT) * 1024 * 1024,
+      maxBytesInFlight,
       conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
       conf.get(config.SHUFFLE_DETECT_CORRUPT),
       conf.get(config.SHUFFLE_DETECT_CORRUPT_MEMORY),

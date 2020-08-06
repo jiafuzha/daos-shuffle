@@ -82,6 +82,33 @@ public class DaosShuffleInputStreamTest {
   }
 
   @Test
+  public void testReadFromOtherThreadCancelMultipleTimesConsecutiveLast() throws Exception {
+    Map<String, AtomicInteger> maps = new HashMap<>();
+    maps.put("0", new AtomicInteger(0));
+    maps.put("39", new AtomicInteger(0));
+    maps.put("40", new AtomicInteger(0));
+    readFromOtherThreadCancelMultipleTimes(maps);
+  }
+
+  @Test
+  public void testReadFromOtherThreadCancelMultipleTimesConsecutiveEarlier() throws Exception {
+    Map<String, AtomicInteger> maps = new HashMap<>();
+    maps.put("2", new AtomicInteger(0));
+    maps.put("4", new AtomicInteger(0));
+    maps.put("6", new AtomicInteger(0));
+    maps.put("8", new AtomicInteger(0));
+    readFromOtherThreadCancelMultipleTimes(maps);
+  }
+
+  @Test
+  public void testReadFromOtherThreadCancelMultipleTimesLongWait() throws Exception {
+    Map<String, AtomicInteger> maps = new HashMap<>();
+    maps.put("2", new AtomicInteger(0));
+    maps.put("4", new AtomicInteger(0));
+    readFromOtherThreadCancelMultipleTimes(maps, 400);
+  }
+
+  @Test
   public void testReadFromOtherThreadCancelAll() throws Exception {
     Map<String, AtomicInteger> maps = new HashMap<>();
     maps.put("4", new AtomicInteger(0));
@@ -90,10 +117,20 @@ public class DaosShuffleInputStreamTest {
     maps.put("24", new AtomicInteger(0));
     maps.put("30", new AtomicInteger(0));
     maps.put("40", new AtomicInteger(0));
-    readFromOtherThreadCancelMultipleTimes(maps);
+    readFromOtherThreadCancelMultipleTimes(maps, 50, false);
   }
 
   public void readFromOtherThreadCancelMultipleTimes(Map<String, AtomicInteger> maps) throws Exception {
+    readFromOtherThreadCancelMultipleTimes(maps, 50);
+  }
+
+  public void readFromOtherThreadCancelMultipleTimes(Map<String, AtomicInteger> maps,
+                                                     int addWaitTimeMs) throws Exception {
+    readFromOtherThreadCancelMultipleTimes(maps, addWaitTimeMs, true);
+  }
+
+  public void readFromOtherThreadCancelMultipleTimes(Map<String, AtomicInteger> maps,
+                                                     int addWaitTimeMs, boolean fromOtherThread) throws Exception {
     int waitDataTimeMs = (int)new SparkConf(false).get(package$.MODULE$.SHUFFLE_DAOS_READ_WAIT_DATA_MS());
     int expectedFetchTimes = 32;
     AtomicInteger fetchTimes = new AtomicInteger(0);
@@ -115,13 +152,17 @@ public class DaosShuffleInputStreamTest {
         AtomicInteger wait = maps.get(mapId);
         if (wait.get() == 0) {
           wait.incrementAndGet();
-          Thread.sleep(waitDataTimeMs + 50);
+          Thread.sleep(waitDataTimeMs + addWaitTimeMs);
+          if ("40".equals(mapId) && !fromOtherThread) { // return data finally in case fromOtherThread is disabled
+            setLength(desc, succeeded, null);
+            latch.countDown();
+          }
           System.out.println("sleep at " + mapId);
           return invocationOnMock;
         } else {
           latch.countDown();
           setLength(desc, succeeded, null);
-          System.out.println("self read later at " + mapId);
+          System.out.println("read again at " + mapId);
           return invocationOnMock;
         }
       }
@@ -275,11 +316,11 @@ public class DaosShuffleInputStreamTest {
         is.nextMap();
       }
       boolean alldone = latch.await(5, TimeUnit.SECONDS);
-      System.out.println(fetchTimes.get());
+      System.out.println("fetch times: " + fetchTimes.get());
       Assert.assertTrue(alldone);
       Assert.assertTrue(succeeded[0]);
       TaskContextObj.mergeReadMetrics(taskContext);
-      System.out.println(taskContext.taskMetrics().shuffleReadMetrics()._fetchWaitTime().sum());
+      System.out.println("total fetch wait time: " + taskContext.taskMetrics().shuffleReadMetrics()._fetchWaitTime().sum());
     } finally {
       daosReader.close();
       DaosReader.stopExecutor();

@@ -47,6 +47,13 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 @NotThreadSafe
+/**
+ * A inputstream for reading shuffled data being consisted of multiple map outputs.
+ *
+ * All records in one specific map output are from same KryoSerializer or Java serializer. To facilitate reading
+ * multiple map outputs in this one inputstream, the read methods return -1 to indicate the completion of current
+ * map output. Caller should call {@link DaosShuffleInputStream#isCompleted()} to check if all map outputs are read.
+ */
 public class DaosShuffleInputStream extends InputStream {
 
   private DaosReader reader;
@@ -209,6 +216,7 @@ public class DaosShuffleInputStream extends InputStream {
     private DaosReader.ReadTaskContext headCtx;
     private DaosReader.ReadTaskContext currentCtx;
     private DaosReader.ReadTaskContext lastCtx;
+    private DaosReader.ReadTaskContext selfCurrentCtx;
     private Deque<DaosReader.ReadTaskContext> consumedStack = new LinkedList<>();
     private IODataDesc currentDesc;
     private IODataDesc.Entry currentEntry;
@@ -245,6 +253,7 @@ public class DaosShuffleInputStream extends InputStream {
           return buf;
         }
       }
+      // all submitted were duplicated. Now start from mapId iterator.
       IODataDesc desc = createNextDesc(config.maxBytesInFlight);
       return getBySelf(desc, lastMapReduceIdForSubmit);
     }
@@ -287,21 +296,23 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     /**
-     * we have to duplicate since mapId was moved.
+     * we have to duplicate submitted desc since mapId was moved.
      *
      * @return
      * @throws IOException
      */
     private ByteBuf readDuplicated() throws IOException {
       // in case no even single return from other thread
-      DaosReader.ReadTaskContext context = currentCtx;
-      if (context == null) {
+      // check selfCurrentCtx since the wait could span multiple contexts/descs
+      DaosReader.ReadTaskContext curCtx = selfCurrentCtx == null ? currentCtx : selfCurrentCtx;
+      DaosReader.ReadTaskContext context;
+      if (curCtx == null) {
         context = headCtx;
       } else {
-        lastMapReduceIdForReturn = currentCtx.getMapReduceId();
+        lastMapReduceIdForReturn = curCtx.getMapReduceId();
         // no consumedStack push and no totalInMemSize and totalSubmitted update
         // since they will be updated when the task context finally returned
-        context = currentCtx.getNext();
+        context = curCtx.getNext();
         if (context == null) {
           if (!fromOtherThread) {
             lastCtx = null;
@@ -310,7 +321,9 @@ public class DaosShuffleInputStream extends InputStream {
         }
       }
       IODataDesc newDesc = context.getDesc().duplicate();
-      return getBySelf(newDesc, context.getMapReduceId());
+      ByteBuf buf = getBySelf(newDesc, context.getMapReduceId());
+      selfCurrentCtx = context;
+      return buf;
     }
 
     /* put last task context to consumedStack */
@@ -361,8 +374,8 @@ public class DaosShuffleInputStream extends InputStream {
           takeLock.unlock();
         }
         if (timeout) {
-          log.warn("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);
           exceedWaitTimes++;
+          log.warn("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);
           return null;
         }
         // get some results after wait
@@ -598,6 +611,7 @@ public class DaosShuffleInputStream extends InputStream {
       if (context.isCancelled()) {
         return null;
       }
+      selfCurrentCtx = null; // non-cancelled currentCtx overrides selfCurrentCtx
       IODataDesc desc = context.getDesc();
       if (!desc.succeeded()) {
         String msg = "failed to get data from DAOS, desc: " + desc.toString(4096);

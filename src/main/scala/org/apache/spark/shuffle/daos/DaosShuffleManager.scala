@@ -26,7 +26,6 @@ package org.apache.spark.shuffle.daos
 import java.util.concurrent.ConcurrentHashMap
 
 import io.daos.DaosClient
-import io.daos.obj.{DaosObject, DaosObjectId}
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.{Logging, config}
 import org.apache.spark.shuffle.sort.SortShuffleManager.canUseBatchFetch
@@ -52,6 +51,9 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   if (io.daos.ShutdownHookManager.removeHook(DaosClient.FINALIZER)) {
     ShutdownHookManager.addShutdownHook(() => DaosClient.FINALIZER.run())
   }
+
+  // stop all executor threads when shutdown
+  ShutdownHookManager.addShutdownHook(() => DaosReader.stopExecutor())
 
   val daosShuffleIO = new DaosShuffleIO(conf)
   daosShuffleIO.initialize(

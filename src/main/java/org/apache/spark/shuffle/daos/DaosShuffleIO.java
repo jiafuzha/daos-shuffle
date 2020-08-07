@@ -131,7 +131,6 @@ public class DaosShuffleIO {
       }
     });
     readerList.clear();
-    DaosReader.stopExecutor();
     objClient.forceClose();
     DaosClient.daosSafeFinalize();
   }

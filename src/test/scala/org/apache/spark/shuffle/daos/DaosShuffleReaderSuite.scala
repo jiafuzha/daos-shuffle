@@ -17,6 +17,7 @@ class DaosShuffleReaderSuite extends SparkFunSuite with LocalSparkContext {
 
   override def beforeAll(): Unit = {
     super.beforeAll()
+    println("start executors in DaosReader " + classOf[DaosReader] + ", has executors: " + DaosReader.hasExecutors)
     MockitoAnnotations.initMocks(this)
   }
 

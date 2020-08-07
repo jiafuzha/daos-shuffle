@@ -13,6 +13,7 @@ import org.apache.spark.shuffle.ShuffleReadMetricsReporter;
 import org.apache.spark.storage.BlockId;
 import org.apache.spark.storage.BlockManagerId;
 import org.apache.spark.storage.ShuffleBlockId;
+import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -315,7 +316,7 @@ public class DaosShuffleInputStreamTest {
         Assert.assertEquals(-1, is.read());
         is.nextMap();
       }
-      boolean alldone = latch.await(5, TimeUnit.SECONDS);
+      boolean alldone = latch.await(10, TimeUnit.SECONDS);
       System.out.println("fetch times: " + fetchTimes.get());
       Assert.assertTrue(alldone);
       Assert.assertTrue(succeeded[0]);
@@ -323,7 +324,6 @@ public class DaosShuffleInputStreamTest {
       System.out.println("total fetch wait time: " + taskContext.taskMetrics().shuffleReadMetrics()._fetchWaitTime().sum());
     } finally {
       daosReader.close();
-      DaosReader.stopExecutor();
       is.close(true);
       context.stop();
     }
@@ -351,5 +351,10 @@ public class DaosShuffleInputStreamTest {
         buf.writeByte((byte)j);
       }
     }
+  }
+
+  @AfterClass
+  public static void afterAll() {
+//    DaosReader.stopExecutor();
   }
 }

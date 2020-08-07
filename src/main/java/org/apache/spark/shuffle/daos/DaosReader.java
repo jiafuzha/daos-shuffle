@@ -27,7 +27,6 @@ import io.daos.obj.DaosObject;
 import io.daos.obj.IODataDesc;
 import io.netty.util.internal.ObjectPool;
 import org.apache.spark.SparkConf;
-import org.apache.spark.SparkEnv;
 import org.apache.spark.launcher.SparkLauncher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,14 +45,14 @@ public class DaosReader {
 
   private Map<DaosShuffleInputStream.BufferSource, Integer> bufferSourceMap = new ConcurrentHashMap<>();
 
-  private static SparkConf conf = SparkEnv.get().conf();
-
-  private static boolean fromOtherThread = (boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
+  private static final SparkConf conf = new SparkConf(false);
+  private static boolean fromOtherThread = (boolean)conf
+      .get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
 
   private static int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS().key(),
       conf.getInt(SparkLauncher.EXECUTOR_CORES, 1));
 
-  private static BoundThreadExecutors executors;
+  private static final BoundThreadExecutors executors;
 
   private static Logger logger = LoggerFactory.getLogger(DaosReader.class);
 
@@ -61,6 +60,8 @@ public class DaosReader {
     if (fromOtherThread) {
       executors = new BoundThreadExecutors("read_executors", threads,
           new ReadThreadFactory());
+    } else {
+      executors = null;
     }
   }
 
@@ -72,8 +73,12 @@ public class DaosReader {
     return object;
   }
 
+  public static boolean hasExecutors() {
+    return executors != null;
+  }
+
   public BoundThreadExecutors.SingleThreadExecutor nextReaderExecutor() {
-    if (fromOtherThread) {
+    if (executors != null) {
       return executors.nextExecutor();
     }
     return null;
@@ -87,7 +92,7 @@ public class DaosReader {
   }
 
   public static void stopExecutor() {
-    if (fromOtherThread) {
+    if (executors != null) {
       executors.stop();
     }
   }
@@ -223,6 +228,7 @@ public class DaosReader {
       } else {
         t = new Thread(runnable, name);
       }
+      t.setDaemon(true);
       t.setUncaughtExceptionHandler((thread, throwable) ->
           logger.error("exception occurred in thread " + name, throwable));
       return t;

@@ -101,6 +101,7 @@ public class BoundThreadExecutors {
     for (int i = 0; i < executors.length; i++) {
       executors[i] = null;
     }
+    logger.info("BoundThreadExecutors stopped");
   }
 
   public static class SingleThreadExecutor implements Executor {
@@ -114,7 +115,11 @@ public class BoundThreadExecutors {
       try {
         while (!Thread.currentThread().isInterrupted()) {
           runnable = queue.take();
-          runnable.run();
+          try {
+            runnable.run();
+          } catch (Exception e) {
+            logger.info("failed to run " + runnable);
+          }
         }
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();

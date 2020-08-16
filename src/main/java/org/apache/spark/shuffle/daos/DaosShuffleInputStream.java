@@ -375,7 +375,9 @@ public class DaosShuffleInputStream extends InputStream {
         metrics.incFetchWaitTime(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
         if (timeout) {
           exceedWaitTimes++;
-          log.warn("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);
+          if (log.isDebugEnabled()) {
+            log.debug("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);
+          }
           return null;
         }
         // get some results after wait
@@ -416,11 +418,10 @@ public class DaosShuffleInputStream extends InputStream {
         }
       }
       if (c < 0) {
-        if (restore) {
-          counter.incrementAndGet();
-        } else {
-          throw new IllegalStateException("counter should be non-negative, " + c);
+        if (!restore && log.isDebugEnabled()) {
+          log.debug("spurious wakeup");
         }
+        counter.incrementAndGet();
       }
       return null;
     }

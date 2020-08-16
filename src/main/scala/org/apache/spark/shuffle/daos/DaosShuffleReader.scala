@@ -45,7 +45,7 @@ class DaosShuffleReader[K, C](
 
   private val conf = SparkEnv.get.conf
 
-  private val daosReader = shuffleIO.getDaosReader(handle.shuffleId);
+  private val daosReader = shuffleIO.getDaosReader(handle.shuffleId)
 
   override def read(): Iterator[Product2[K, C]] = {
     val maxBytesInFlight = conf.get(SHUFFLE_DAOS_READ_MAX_BYTES_IN_FLIGHT)

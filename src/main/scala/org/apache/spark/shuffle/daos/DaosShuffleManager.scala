@@ -23,17 +23,18 @@
 
 package org.apache.spark.shuffle.daos
 
+import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 
 import io.daos.DaosClient
-import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.{Logging, config}
-import org.apache.spark.shuffle.sort.SortShuffleManager.canUseBatchFetch
 import org.apache.spark.shuffle._
+import org.apache.spark.shuffle.sort.SortShuffleManager.canUseBatchFetch
 import org.apache.spark.util.ShutdownHookManager
 import org.apache.spark.util.collection.OpenHashSet
+import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 
-import collection.JavaConverters._
+import scala.collection.JavaConverters._
 
 /**
  * A shuffle manager to write and read map data from DAOS using DAOS object API.
@@ -43,22 +44,55 @@ import collection.JavaConverters._
  */
 class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
 
+  logInfo("loaded " + classOf[DaosShuffleManager])
+
   if (conf.get(config.SHUFFLE_USE_OLD_FETCH_PROTOCOL)) {
     throw new IllegalArgumentException("DaosShuffleManager doesn't support old fetch protocol. Please remove " +
       config.SHUFFLE_USE_OLD_FETCH_PROTOCOL.key)
   }
 
-  if (io.daos.ShutdownHookManager.removeHook(DaosClient.FINALIZER)) {
-    ShutdownHookManager.addShutdownHook(() => DaosClient.FINALIZER.run())
+  def findHadoopFs: Method = {
+    try {
+      val fsClass = Class.forName("org.apache.hadoop.fs.FileSystem")
+      fsClass.getMethod("closeAll")
+    } catch {
+      case _: Throwable => null
+    }
+  }
+
+  val closeAllFsMethod = findHadoopFs
+
+  def closeAllHadoopFs: Unit = {
+    if (closeAllFsMethod == null) {
+      return
+    }
+    try {
+      closeAllFsMethod.invoke(null)
+    } catch {
+      case _: Throwable => // ignore all exceptions
+    }
   }
 
   // stop all executor threads when shutdown
   ShutdownHookManager.addShutdownHook(() => DaosReader.stopExecutor())
 
+  val finalizer = () => {
+    closeAllHadoopFs
+    daosFinalizer.run()
+  }
+
+  val daosFinalizer = DaosClient.FINALIZER
+  if (io.daos.ShutdownHookManager.removeHook(daosFinalizer) ||
+    org.apache.hadoop.util.ShutdownHookManager.get.removeShutdownHook(daosFinalizer)) {
+    ShutdownHookManager.addShutdownHook(finalizer)
+    logInfo("relocated daos finalizer")
+  } else {
+    logWarning("failed to relocate daos finalizer")
+  }
+
   val daosShuffleIO = new DaosShuffleIO(conf)
   daosShuffleIO.initialize(
     conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX).toMap.asJava)
-
 
   /**
    * A mapping from shuffle ids to the task ids of mappers producing output for those shuffles.
@@ -142,5 +176,8 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
 
   override def stop(): Unit = {
     daosShuffleIO.close()
+    finalizer()
+    ShutdownHookManager.removeShutdownHook(finalizer)
+    logInfo("stopped " + classOf[DaosShuffleManager])
   }
 }

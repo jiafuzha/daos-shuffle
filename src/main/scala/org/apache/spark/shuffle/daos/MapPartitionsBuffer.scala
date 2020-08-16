@@ -25,14 +25,11 @@ package org.apache.spark.shuffle.daos
 
 import java.util.Comparator
 
+import org.apache.spark._
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.{MemoryConsumer, TaskMemoryManager}
 import org.apache.spark.serializer.Serializer
-import org.apache.spark.util.Utils
 import org.apache.spark.util.collection.SizeTrackingAppendOnlyMap
-import org.apache.spark.{Aggregator, Partitioner, SparkConf, SparkEnv, TaskContext}
-
-import scala.collection.mutable
 
 class MapPartitionsBuffer[K, V, C](
     shuffleId: Int,
@@ -60,6 +57,7 @@ class MapPartitionsBuffer[K, V, C](
   }
 
   private val daosWriter = shuffleIO.getDaosWriter(
+    numPartitions,
     shuffleId,
     context.taskAttemptId(),
     singleBufSize.asInstanceOf[Int],
@@ -129,11 +127,7 @@ class MapPartitionsBuffer[K, V, C](
 
   def close: Unit = {
     // serialize rest of records
-    Utils.tryWithSafeFinally {
-      writeBuffer.close
-    } {
-      daosWriter.close
-    }
+    daosWriter.close
   }
 
   protected def addElementsRead(): Unit = { _elementsRead += 1 }
@@ -160,24 +154,24 @@ class MapPartitionsBuffer[K, V, C](
     if (log.isDebugEnabled()) {
       log.debug("partBufferThreshold: " + partBufferThreshold)
       log.debug("totalBufferThreshold: " + totalBufferThreshold)
-      log.debug("totalBufferInitial: " + totalBufferInitial)
+//      log.debug("totalBufferInitial: " + totalBufferInitial)
       log.debug("forceWritePct: " + forceWritePct)
       log.debug("totalWriteValve: " + totalWriteValve)
     }
 
-    if (totalBufferInitial > totalBufferThreshold) {
-      throw new IllegalArgumentException("total buffer initial size (" + totalBufferInitial + ") should be no less " +
-        "than total buffer threshold (" + totalBufferThreshold + ").")
-    }
+//    if (totalBufferInitial > totalBufferThreshold) {
+//      throw new IllegalArgumentException("total buffer initial size (" + totalBufferInitial + ") should be no less " +
+//        "than total buffer threshold (" + totalBufferThreshold + ").")
+//    }
 
     private var totalSize = 0L
-    private var memoryLimit = totalBufferInitial * 1L
+//    private var memoryLimit = totalBufferInitial * 1L
     private var largestSize = 0L
 
     var peakSize = 0L
 
-    private val partitionMap = mutable.Map[Int, SizeAwareMap[K, C]]()
-    private val partitionBuffer = mutable.Map[Int, SizeAwareBuffer[K, C]]()
+    private val partitionMapArray = new Array[SizeAwareMap[K, C]](numPartitions)
+    private val partitionBufferArray = new Array[SizeAwareBuffer[K, C]](numPartitions)
 
     private def initialize[T >: Linked[K, C] with SizeAware[K, C]](): (T, T) = {
       val mapHead = new SizeAwareMap[K, C](-1, partBufferThreshold,
@@ -191,9 +185,9 @@ class MapPartitionsBuffer[K, V, C](
       if (comparator.isDefined) {
         (0 until numPartitions).foreach(i => {
           val map = new SizeAwareMap[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
-          partitionMap += (i -> map)
+          partitionMapArray(i) = map
           if (i > 0) {
-            val prevMap = partitionMap(i - 1)
+            val prevMap = partitionMapArray(i - 1)
             prevMap.next = map
             map.prev = prevMap
           }
@@ -201,17 +195,17 @@ class MapPartitionsBuffer[K, V, C](
       } else {
         (0 until numPartitions).foreach(i => {
           val buffer = new SizeAwareBuffer[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
-          partitionBuffer += (i -> buffer)
+          partitionBufferArray(i) = buffer
           if (i > 0) {
-            val prevBuffer = partitionBuffer(i - 1)
+            val prevBuffer = partitionBufferArray(i - 1)
             prevBuffer.next = buffer
             buffer.prev = prevBuffer
           }
         })
       }
       val (head, end) = if (comparator.isDefined) (mapHead, mapEnd) else (bufferHead, bufferEnd)
-      val (first, last) = if (comparator.isDefined) (partitionMap(0), partitionMap(numPartitions - 1))
-        else (partitionBuffer(0), partitionBuffer(numPartitions - 1))
+      val (first, last) = if (comparator.isDefined) (partitionMapArray(0), partitionMapArray(numPartitions - 1))
+        else (partitionBufferArray(0), partitionBufferArray(numPartitions - 1))
       head.next = first
       first.prev = head
       end.prev = last
@@ -249,13 +243,13 @@ class MapPartitionsBuffer[K, V, C](
     }
 
     def changeValue(partitionId: Int, key: K, updateFunc: (Boolean, C) => C) = {
-      val map = partitionMap(partitionId)
+      val map = partitionMapArray(partitionId)
       val estSize = map.changeValue(key, updateFunc)
       afterUpdate(estSize, map)
     }
 
     def insert(partitionId: Int, key: K, value: C): Unit = {
-      val buffer = partitionBuffer(partitionId)
+      val buffer = partitionBufferArray(partitionId)
       val estSize = buffer.insert(key, value)
       afterUpdate(estSize, buffer)
     }
@@ -278,16 +272,16 @@ class MapPartitionsBuffer[K, V, C](
         buffer.writeAndFlush
         moveToLast(end, buffer)
       }
-      if (totalSize > memoryLimit) {
-        val memRequest = 2 * totalSize - memoryLimit
-        val granted = acquireMemory(memRequest)
-        memoryLimit += granted
-        if (totalSize >= memoryLimit) {
-          val buffer = head.next
-          buffer.writeAndFlush
-          moveToLast(end, buffer)
-        }
-      }
+//      if (totalSize > memoryLimit) {
+//        val memRequest = 2 * totalSize - memoryLimit
+//        val granted = acquireMemory(memRequest)
+//        memoryLimit += granted
+//        if (totalSize >= memoryLimit) {
+//          val buffer = head.next
+//          buffer.writeAndFlush
+//          moveToLast(end, buffer)
+//        }
+//      }
     }
 
     def updateTotalSize(diff: Long): Unit = {
@@ -297,19 +291,18 @@ class MapPartitionsBuffer[K, V, C](
       }
     }
 
-    def releaseMemory(memory: Long): Unit = {
-      memoryLimit -= memory
-    }
+//    def releaseMemory(memory: Long): Unit = {
+//      memoryLimit -= memory
+//    }
 
     def flushAll: Unit = {
-      val buffer = if (comparator.isDefined) partitionMap else partitionBuffer
-      buffer.foreach(e => e._2.writeAndFlush)
+      val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
+      buffer.foreach(e => e.writeAndFlush)
     }
 
     def close: Unit = {
-      val buffer = if (comparator.isDefined) partitionMap else partitionBuffer
-      buffer.foreach(b => b._2.close)
-      buffer.clear()
+      val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
+      buffer.foreach(b => b.close)
     }
 
     def spill(size: Long, trigger: MemoryConsumer): Long = ???
@@ -348,10 +341,10 @@ class MapPartitionsBuffer[K, V, C](
       }
     }
 
-    def releaseMemory(memory: Long): Unit = {
-      freeMemory(memory)
-      parent.releaseMemory(memory)
-    }
+//    def releaseMemory(memory: Long): Unit = {
+//      freeMemory(memory)
+//      parent.releaseMemory(memory)
+//    }
 
     private def writeAndFlush(memory: Long): Unit = {
       val writer = if (_pairsWriter != null) _pairsWriter else pairsWriter
@@ -365,7 +358,7 @@ class MapPartitionsBuffer[K, V, C](
         writeCount += count
         lastSize = 0
         parent.updateTotalSize(-memory)
-        releaseMemory(memory - totalBufferInitial)
+//        releaseMemory(memory - totalBufferInitial)
         reset
       }
     }

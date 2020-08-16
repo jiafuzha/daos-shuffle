@@ -85,7 +85,7 @@ public class DaosReader {
   }
 
   public void close() throws IOException {
-    object.close();
+//    object.close();
     // force releasing
     bufferSourceMap.forEach((k, v) -> k.cleanup(true));
     bufferSourceMap.clear();
@@ -140,7 +140,6 @@ public class DaosReader {
       } catch (Exception e) {
         log.error("failed to read for " + context.desc, e);
       } finally {
-        context.counter.getAndIncrement();
         context.signal();
         context.desc.release(cancelled);
         context = null;
@@ -194,6 +193,7 @@ public class DaosReader {
     }
 
     public void signal() {
+      counter.getAndIncrement();
       takeLock.lock();
       try {
         notEmpty.signal();

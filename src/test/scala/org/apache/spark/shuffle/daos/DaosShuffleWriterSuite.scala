@@ -46,7 +46,7 @@ class DaosShuffleWriterSuite extends SparkFunSuite with SharedSparkContext with 
     val context = MemoryTestingUtils.fakeTaskContext(sc.env)
 
     val daosWriter: DaosWriter = Mockito.mock(classOf[DaosWriter])
-    when(shuffleIO.getDaosWriter(shuffleId, context.taskAttemptId(), singleBufSize.toInt, minSize.toInt))
+    when(shuffleIO.getDaosWriter(5, shuffleId, context.taskAttemptId(), singleBufSize.toInt, minSize.toInt))
       .thenReturn(daosWriter)
     val partitionLengths = Array[Long](5)
     when(daosWriter.getPartitionLens(numMaps)).thenReturn(partitionLengths)
@@ -67,7 +67,7 @@ class DaosShuffleWriterSuite extends SparkFunSuite with SharedSparkContext with 
     val records = List[(Int, Int)]((1, 2), (2, 3), (4, 4), (6, 5))
 
     val daosWriter: DaosWriter = Mockito.mock(classOf[DaosWriter])
-    when(shuffleIO.getDaosWriter(shuffleId, context.taskAttemptId(), singleBufSize.toInt, minSize.toInt))
+    when(shuffleIO.getDaosWriter(5, shuffleId, context.taskAttemptId(), singleBufSize.toInt, minSize.toInt))
       .thenReturn(daosWriter)
     val partitionLengths = Array[Long](5)
     when(daosWriter.getPartitionLens(numMaps)).thenReturn(partitionLengths)

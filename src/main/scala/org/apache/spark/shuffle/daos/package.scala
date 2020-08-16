@@ -25,7 +25,6 @@ package org.apache.spark.shuffle
 
 import org.apache.spark.internal.config.ConfigBuilder
 import org.apache.spark.network.util.ByteUnit
-import org.apache.spark.unsafe.array.ByteArrayMethods
 
 package object daos {
 
@@ -54,9 +53,8 @@ package object daos {
       .doc("Size of the in-memory buffer for each map partition output, in KiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.KiB)
-      .checkValue(v => v > 0 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024,
-        s"The map partition buffer size must be positive and less than or equal to" +
-          s" ${ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024}.")
+      .checkValue(v => v > 0,
+        s"The map partition buffer size must be positive.")
       .createWithDefaultString("2048k")
 
   val SHUFFLE_DAOS_BUFFER_SIZE =
@@ -64,9 +62,8 @@ package object daos {
       .doc("Size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
-      .checkValue(v => v > 50 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
-        s"The total buffer size must be bigger than 50m and less than or equal to" +
-          s" ${ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024}.")
+      .checkValue(v => v > 50,
+        s"The total buffer size must be bigger than 50m.")
       .createWithDefaultString("800m")
 
   val SHUFFLE_DAOS_BUFFER_INITIAL_SIZE =
@@ -74,9 +71,8 @@ package object daos {
       .doc("Initial size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
-      .checkValue(v => v > 10 && v <= ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024,
-        s"The initial total buffer size must be bigger than 10m and less than or equal to" +
-          s" ${ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 1024 / 1024}.")
+      .checkValue(v => v > 10,
+        s"The initial total buffer size must be bigger than 10m.")
       .createWithDefaultString("80m")
 
   val SHUFFLE_DAOS_BUFFER_FORCE_WRITE_PCT =
@@ -91,12 +87,21 @@ package object daos {
 
   val SHUFFLE_DAOS_WRITE_MINIMUM_SIZE =
     ConfigBuilder("spark.shuffle.daos.write.minimum")
-      .doc("minimum size when write to DAOS, in KiB. A warning will be generated when size is less than this value.")
+      .doc("minimum size when write to DAOS, in KiB. A warning will be generated when size is less than this value" +
+        " and spark.shuffle.daos.write.warn.small is set to true")
       .version("3.0.0")
       .bytesConf(ByteUnit.KiB)
       .checkValue(v => v > 0,
         s"The DAOS write minimum size must be positive")
       .createWithDefaultString("128k")
+
+  val SHUFFLE_DAOS_WRITE_WARN_SMALL_SIZE =
+    ConfigBuilder("spark.shuffle.daos.write.warn.small")
+      .doc("log warning message when the size of written data is smaller than spark.shuffle.daos.write.minimum." +
+        " Default is false")
+      .version("3.0.0")
+      .booleanConf
+      .createWithDefault(false)
 
   val SHUFFLE_DAOS_WRITE_SINGLE_BUFFER_SIZE =
     ConfigBuilder("spark.shuffle.daos.write.buffer.single")

@@ -23,11 +23,10 @@
 
 package org.apache.spark.shuffle.daos
 
-import org.apache.spark.{SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.scheduler.MapStatus
-import org.apache.spark.shuffle.{BaseShuffleHandle, ShuffleWriteMetricsReporter, ShuffleWriter}
-import org.apache.spark.util.collection.ExternalSorter
+import org.apache.spark.shuffle.{BaseShuffleHandle, ShuffleWriter}
+import org.apache.spark.{SparkEnv, TaskContext}
 
 class DaosShuffleWriter[K, V, C](
     handle: BaseShuffleHandle[K, V, C],

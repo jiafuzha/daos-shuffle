@@ -50,12 +50,16 @@ public class DaosWriter {
 
   private DaosObject object;
 
-  private Map<Integer, NativeBuffer> partitionBufMap = new HashMap<>();
+  private boolean warnSmallWrite;
+
+  private NativeBuffer[] partitionBufArray;
 
   private static Logger LOG = LoggerFactory.getLogger(DaosWriter.class);
 
-  public DaosWriter(long appId, int shuffleId, long mapId, int bufferSize, int minSize, DaosObject object) {
+  public DaosWriter(long appId, int numPartitions, int shuffleId, long mapId, int bufferSize, int minSize,
+                    DaosObject object) {
     this.appId = appId;
+    this.partitionBufArray = new NativeBuffer[numPartitions];
     this.shuffleId = shuffleId;
     this.mapId = String.valueOf(mapId);
     this.bufferSize = bufferSize;
@@ -64,10 +68,10 @@ public class DaosWriter {
   }
 
   private NativeBuffer getNativeBuffer(int partitionId) {
-    NativeBuffer buffer = partitionBufMap.get(partitionId);
+    NativeBuffer buffer = partitionBufArray[partitionId];
     if (buffer == null) {
       buffer = new NativeBuffer(partitionId, bufferSize);
-      partitionBufMap.put(partitionId, buffer);
+      partitionBufArray[partitionId] = buffer;
     }
     return buffer;
   }
@@ -85,36 +89,40 @@ public class DaosWriter {
   }
 
   public long[] getPartitionLens(int numPartitions) {
-    long[] lens = new long[numPartitions];
-    partitionBufMap.values().stream().sorted().forEach(b -> {
-      lens[b.partitionId] = b.totalSize;
-      if (b.roundSize != 0) {
-        throw new IllegalStateException("round size should be 0, " + b.roundSize);
-      }
-    });
     if (LOG.isDebugEnabled()) {
-      LOG.debug("partition map size: " + partitionBufMap.size());
-      partitionBufMap.forEach((k, v) -> LOG.info("id: " + k + ", native buffer: " + v.partitionId + ", " +
-          v.totalSize + ", " + v.roundSize));
+      LOG.debug("partition map size: " + partitionBufArray.length);
+      for (int i = 0; i < numPartitions; i++) {
+        NativeBuffer nb = partitionBufArray[i];
+        LOG.debug("id: " + i + ", native buffer: " + nb.partitionId + ", " +
+            nb.totalSize + ", " + nb.roundSize);
+      }
     }
-
+    long[] lens = new long[numPartitions];
+    for (int i = 0; i < numPartitions; i++) {
+      NativeBuffer nb = partitionBufArray[i];
+      lens[i] = nb.totalSize;
+      if (nb.roundSize != 0 || !nb.bufList.isEmpty()) {
+        throw new IllegalStateException("round size should be 0, " + nb.roundSize + ", buflist shoud be empty, " +
+            nb.bufList.size());
+      }
+    }
     return lens;
   }
 
   public void flush(int partitionId) throws IOException {
-    NativeBuffer buffer = partitionBufMap.get(partitionId);
+    NativeBuffer buffer = partitionBufArray[partitionId];
     if (buffer == null) {
       return;
     }
     IODataDesc desc = buffer.createUpdateDesc();
     if (desc != null) {
-      if (buffer.roundSize < minSize) {
+      if (warnSmallWrite && buffer.roundSize < minSize) {
         LOG.warn("too small partition size {}, shuffle {}, map {}, partition {}, app {}",
             buffer.roundSize, shuffleId, mapId, partitionId, appId);
       }
       try {
         object.update(desc);
-      }catch (IOException e) {
+      } catch (IOException e) {
         throw new IOException("failed to flush rest of partition " + partitionId, e);
       } finally {
         desc.release();
@@ -124,10 +132,15 @@ public class DaosWriter {
   }
 
   public void close() throws IOException {
-    partitionBufMap.clear();
-    partitionBufMap = null;
-    object.close();
-    object = null;
+    if (partitionBufArray != null) {
+      partitionBufArray = null;
+//    object.close();
+      object = null;
+    }
+  }
+
+  protected void setWarnSmallWrite(boolean warnSmallWrite) {
+    this.warnSmallWrite = warnSmallWrite;
   }
 
   /**
@@ -149,7 +162,13 @@ public class DaosWriter {
     }
 
     private ByteBuf addNewByteBuf(int len) {
-      ByteBuf buf = BufferAllocator.objBufWithNativeOrder(Math.max(bufferSize, len));
+      ByteBuf buf;
+      try {
+        buf = BufferAllocator.objBufWithNativeOrder(Math.max(bufferSize, len));
+      } catch (OutOfMemoryError e) {
+        LOG.error("too big buffer size: " + Math.max(bufferSize, len));
+        throw e;
+      }
       bufList.add(buf);
       idx++;
       return buf;
@@ -176,6 +195,9 @@ public class DaosWriter {
     }
 
     public void write(byte[] b, int offset, int len) {
+      if (len <= 0) {
+        return;
+      }
       ByteBuf buf = getBuffer(len);
       int avail = buf.writableBytes();
       int gap = len - avail;

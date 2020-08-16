@@ -363,16 +363,16 @@ public class DaosShuffleInputStream extends InputStream {
       IODataDesc desc;
       while (true) {
         boolean timeout = false;
+        long start = System.nanoTime();
         takeLock.lockInterruptibly();
         try {
-          long start = System.nanoTime();
           if (!notEmpty.await(config.waitDataTimeMs, TimeUnit.MILLISECONDS)) {
             timeout = true;
           }
-          metrics.incFetchWaitTime(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
         } finally {
           takeLock.unlock();
         }
+        metrics.incFetchWaitTime(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
         if (timeout) {
           exceedWaitTimes++;
           log.warn("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);

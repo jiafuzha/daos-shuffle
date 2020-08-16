@@ -23,7 +23,6 @@
 
 package org.apache.spark.shuffle.daos;
 
-import io.daos.DaosClient;
 import io.daos.obj.DaosObjClient;
 import io.daos.obj.DaosObject;
 import io.daos.obj.DaosObjectException;
@@ -36,6 +35,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class DaosShuffleIO {
 
@@ -51,10 +51,15 @@ public class DaosShuffleIO {
 
   private String ranks;
 
+  private boolean warnSmallWrite;
+
   private List<DaosReader> readerList = new ArrayList<>();
+
+  private Map<String, DaosObject> objectMap = new ConcurrentHashMap<>();
 
   public DaosShuffleIO(SparkConf conf) {
     this.conf = conf;
+    this.warnSmallWrite = (boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_WARN_SMALL_SIZE());
   }
 
   private static final Logger logger = LoggerFactory.getLogger(DaosShuffleIO.class);
@@ -80,7 +85,8 @@ public class DaosShuffleIO {
   /**
    * Should be called in the Driver after TaskScheduler registration and
    * from the start in the Executor.
-   * 
+   *
+   * @param numPartitions
    * @param shuffleId
    * @param mapId
    * @param bufferSize
@@ -88,25 +94,53 @@ public class DaosShuffleIO {
    * @return
    * @throws IOException
    */
-  public DaosWriter getDaosWriter(int shuffleId, long mapId, int bufferSize, int minSize) throws IOException {
+  public DaosWriter getDaosWriter(int numPartitions, int shuffleId, long mapId, int bufferSize, int minSize)
+      throws IOException {
     long appId = parseAppId(conf.getAppId());
-    logger.info("getting daoswriter for app id: " + appId + ", shuffle id: " + shuffleId + ", map id: " + mapId);
-    return new DaosWriter(appId, shuffleId, mapId, bufferSize, minSize, openObject(appId, shuffleId));
+    if (logger.isDebugEnabled()) {
+      logger.debug("getting daoswriter for app id: " + appId + ", shuffle id: " + shuffleId + ", map id: " + mapId +
+          ", numPartitions: " + numPartitions);
+    }
+    DaosWriter writer = new DaosWriter(appId, numPartitions, shuffleId, mapId, bufferSize, minSize,
+        getObject(appId, shuffleId));
+    writer.setWarnSmallWrite(warnSmallWrite);
+    return writer;
   }
 
   public DaosReader getDaosReader(int shuffleId) throws DaosObjectException {
     long appId = parseAppId(conf.getAppId());
-    logger.info("getting daosreader for app id: " + appId + ", shuffle id: " + shuffleId);
-    DaosReader reader = new DaosReader(openObject(appId, shuffleId));
+    if (logger.isDebugEnabled()) {
+      logger.debug("getting daosreader for app id: " + appId + ", shuffle id: " + shuffleId);
+    }
+    DaosReader reader = new DaosReader(getObject(appId, shuffleId));
     readerList.add(reader);
     return reader;
   }
 
-  private DaosObject openObject(long appId, int shuffleId) throws DaosObjectException {
-    DaosObjectId id = new DaosObjectId(appId, shuffleId);
-    id.encode();
-    DaosObject object = objClient.getObject(id);
-    object.open();
+  private String getKey(long appId, int shuffleId) {
+    return appId + "" + shuffleId;
+  }
+
+  private DaosObject getObject(long appId, int shuffleId) throws DaosObjectException {
+    String key = getKey(appId, shuffleId);
+    DaosObject object = objectMap.get(key);
+    if (object == null) {
+      DaosObjectId id = new DaosObjectId(appId, shuffleId);
+      id.encode();
+      object = objClient.getObject(id);
+      objectMap.putIfAbsent(key, object);
+      DaosObject activeObject = objectMap.get(key);
+      if (activeObject != object) { // release just created DaosObject
+        object.close();
+        object = activeObject;
+      }
+      // open just once in multiple threads
+      if (!object.isOpen()) {
+        synchronized (object) {
+          object.open();
+        }
+      }
+    }
     return object;
   }
 
@@ -114,7 +148,11 @@ public class DaosShuffleIO {
     long appId = parseAppId(conf.getAppId());
     logger.info("punching daos object for app id: " + appId + ", shuffle id: " + shuffleId);
     try {
-      openObject(appId, shuffleId).punch();
+      DaosObject object = objectMap.remove(getKey(appId, shuffleId));
+      if (object != null) {
+        object.punch();
+        object.close();
+      }
     } catch (Exception e) {
       logger.error("failed to punch object", e);
       return false;
@@ -132,6 +170,5 @@ public class DaosShuffleIO {
     });
     readerList.clear();
     objClient.forceClose();
-    DaosClient.daosSafeFinalize();
   }
 }

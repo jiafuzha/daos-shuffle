@@ -73,15 +73,20 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
     }
   }
 
+  val daosShuffleIO = new DaosShuffleIO(conf)
+  daosShuffleIO.initialize(
+    conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX).toMap.asJava)
+
   // stop all executor threads when shutdown
-  ShutdownHookManager.addShutdownHook(() => DaosReader.stopExecutor())
+  ShutdownHookManager.addShutdownHook(() => daosShuffleIO.close())
+
+  val daosFinalizer = DaosClient.FINALIZER
 
   val finalizer = () => {
     closeAllHadoopFs
     daosFinalizer.run()
   }
 
-  val daosFinalizer = DaosClient.FINALIZER
   if (io.daos.ShutdownHookManager.removeHook(daosFinalizer) ||
     org.apache.hadoop.util.ShutdownHookManager.get.removeShutdownHook(daosFinalizer)) {
     ShutdownHookManager.addShutdownHook(finalizer)
@@ -89,10 +94,6 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   } else {
     logWarning("failed to relocate daos finalizer")
   }
-
-  val daosShuffleIO = new DaosShuffleIO(conf)
-  daosShuffleIO.initialize(
-    conf.getAllWithPrefix(ShuffleDataIOUtils.SHUFFLE_SPARK_CONF_PREFIX).toMap.asJava)
 
   /**
    * A mapping from shuffle ids to the task ids of mappers producing output for those shuffles.
@@ -127,7 +128,6 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       mapId: Long,
       context: TaskContext,
       metrics: ShuffleWriteMetricsReporter)
-
     = {
     val mapTaskIds = taskIdMapsForShuffle.computeIfAbsent(
       handle.shuffleId, _ => new OpenHashSet[Long](16))
@@ -141,7 +141,6 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
       endPartition: Int,
       context: TaskContext,
       metrics: ShuffleReadMetricsReporter)
-
     = {
     val blocksByAddress = SparkEnv.get.mapOutputTracker.getMapSizesByExecutorId(
       handle.shuffleId, startPartition, endPartition)

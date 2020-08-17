@@ -50,18 +50,11 @@ class MapPartitionsBuffer[K, V, C](
 
   private val serializerManager = SparkEnv.get.serializerManager
   private val serInstance = serializer.newInstance()
-  private val singleBufSize = conf.get(SHUFFLE_DAOS_WRITE_SINGLE_BUFFER_SIZE) * 1024 * 1024
-  private val minSize = conf.get(SHUFFLE_DAOS_WRITE_MINIMUM_SIZE) * 1024
-  if (log.isDebugEnabled) {
-    log.debug("single buffer size: " + singleBufSize + ", minSize: " + minSize)
-  }
 
   private val daosWriter = shuffleIO.getDaosWriter(
     numPartitions,
     shuffleId,
-    context.taskAttemptId(),
-    singleBufSize.asInstanceOf[Int],
-    minSize.asInstanceOf[Int])
+    context.taskAttemptId())
   private val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 
   /* key comparator if map-side combiner is defined */

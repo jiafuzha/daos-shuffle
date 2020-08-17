@@ -26,13 +26,10 @@ package org.apache.spark.shuffle.daos;
 import io.daos.obj.DaosObject;
 import io.daos.obj.IODataDesc;
 import io.netty.util.internal.ObjectPool;
-import org.apache.spark.SparkConf;
-import org.apache.spark.launcher.SparkLauncher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import scala.Tuple2;
 
-import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,35 +42,22 @@ public class DaosReader {
 
   private Map<DaosShuffleInputStream.BufferSource, Integer> bufferSourceMap = new ConcurrentHashMap<>();
 
-  private static final SparkConf conf = new SparkConf(false);
-  private static boolean fromOtherThread = (boolean)conf
-      .get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
+  private BoundThreadExecutors executors;
 
-  private static int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS().key(),
-      conf.getInt(SparkLauncher.EXECUTOR_CORES, 1));
-
-  private static final BoundThreadExecutors executors;
+  private Map<DaosReader, Integer> readerMap;
 
   private static Logger logger = LoggerFactory.getLogger(DaosReader.class);
 
-  static {
-    if (fromOtherThread) {
-      executors = new BoundThreadExecutors("read_executors", threads,
-          new ReadThreadFactory());
-    } else {
-      executors = null;
-    }
-  }
-
-  public DaosReader(DaosObject object) {
+  public DaosReader(DaosObject object, BoundThreadExecutors executors) {
     this.object = object;
+    this.executors = executors;
   }
 
   public DaosObject getObject() {
     return object;
   }
 
-  public static boolean hasExecutors() {
+  public boolean hasExecutors() {
     return executors != null;
   }
 
@@ -84,16 +68,13 @@ public class DaosReader {
     return null;
   }
 
-  public void close() throws IOException {
-//    object.close();
+  public void close() {
     // force releasing
     bufferSourceMap.forEach((k, v) -> k.cleanup(true));
     bufferSourceMap.clear();
-  }
-
-  public static void stopExecutor() {
-    if (executors != null) {
-      executors.stop();
+    if (readerMap != null) {
+      readerMap.remove(this);
+      readerMap = null;
     }
   }
 
@@ -110,6 +91,11 @@ public class DaosReader {
 
   public void unregister(DaosShuffleInputStream.BufferSource source) {
     bufferSourceMap.remove(source);
+  }
+
+  public void setReaderMap(Map<DaosReader, Integer> readerMap) {
+    readerMap.put(this, null);
+    this.readerMap = readerMap;
   }
 
   final static class ReadTask implements Runnable {
@@ -151,72 +137,26 @@ public class DaosReader {
   /**
    * should be cached in caller thread.
    */
-  final static class ReadTaskContext {
-    private final DaosObject object;
-    private final AtomicInteger counter;
-    private final Lock takeLock;
-    private final Condition notEmpty;
-    private IODataDesc desc;
-    private Tuple2<Integer, Integer> mapReduceId;
-    private volatile boolean cancelled; // for multi-thread
-    private boolean cancelledByCaller; // for accessing by caller
-    private ReadTaskContext next;
+  final static class ReadTaskContext extends LinkedTaskContext {
 
     public ReadTaskContext(DaosObject object, AtomicInteger counter, Lock takeLock, Condition notEmpty,
-                           IODataDesc desc, Tuple2<Integer, Integer> mapReduceId) {
-      this.object = object;
-      this.counter = counter;
-      this.takeLock = takeLock;
-      this.notEmpty = notEmpty;
+                           IODataDesc desc, Object mapReduceId) {
+      super(object, counter, takeLock, notEmpty);
       this.desc = desc;
-      this.mapReduceId = mapReduceId;
+      this.morePara = mapReduceId;
     }
 
-    public void reuse(IODataDesc desc, Tuple2<Integer, Integer> mapReduceId) {
-      this.desc = desc;
-      this.mapReduceId = mapReduceId;
-      cancelled = false;
-      cancelledByCaller = false;
-      next = null;
-    }
-
-    public void setNext(ReadTaskContext next) {
-      this.next = next;
-    }
-
+    @Override
     public ReadTaskContext getNext() {
-      return next;
-    }
-
-    public IODataDesc getDesc() {
-      return desc;
-    }
-
-    public void signal() {
-      counter.getAndIncrement();
-      takeLock.lock();
-      try {
-        notEmpty.signal();
-      } finally {
-        takeLock.unlock();
-      }
+      return (ReadTaskContext) next;
     }
 
     public Tuple2<Integer, Integer> getMapReduceId() {
-      return mapReduceId;
-    }
-
-    public void cancel() {
-      cancelled = true;
-      cancelledByCaller = true;
-    }
-
-    public boolean isCancelled() {
-      return cancelledByCaller;
+      return (Tuple2<Integer, Integer>) morePara;
     }
   }
 
-  private static class ReadThreadFactory implements ThreadFactory {
+  protected static class ReadThreadFactory implements ThreadFactory {
     private AtomicInteger id = new AtomicInteger(0);
 
     @Override

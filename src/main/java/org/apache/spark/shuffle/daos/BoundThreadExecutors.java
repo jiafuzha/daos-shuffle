@@ -41,6 +41,8 @@ public class BoundThreadExecutors {
 
   private ThreadFactory threadFactory;
 
+  private volatile boolean stopped;
+
   public static final int NOT_STARTED = 0;
   public static final int STARTING = 1;
   public static final int STARTED = 2;
@@ -70,12 +72,16 @@ public class BoundThreadExecutors {
   }
 
   public void stop() {
+    if (stopped) {
+      return;
+    }
     for (SingleThreadExecutor executor : executors) {
       if (executor != null) {
         executor.interrupt();
       }
     }
     boolean allStopped;
+    boolean timeout = false;
     int count = 0;
     while (true) {
       allStopped = true;
@@ -88,12 +94,14 @@ public class BoundThreadExecutors {
         break;
       }
       if (count >= 5) {
+        timeout = true;
         break;
       }
       try {
         Thread.sleep(200);
       } catch (InterruptedException e) {
         logger.warn("interrupted when waiting for all executors stopping, " + name, e);
+        timeout = true;
         break;
       }
       count++;
@@ -101,7 +109,8 @@ public class BoundThreadExecutors {
     for (int i = 0; i < executors.length; i++) {
       executors[i] = null;
     }
-    logger.info("BoundThreadExecutors stopped");
+    stopped = true;
+    logger.info("BoundThreadExecutors stopped" + (timeout ? " with some threads still running." : "."));
   }
 
   public static class SingleThreadExecutor implements Executor {

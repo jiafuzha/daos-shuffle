@@ -288,7 +288,7 @@ public class DaosShuffleInputStreamTest {
 
     Mockito.doAnswer(answer).when(daosObject).fetch(any(IODataDesc.class));
 
-    DaosReader daosReader = new DaosReader(daosObject);
+    DaosReader daosReader = new DaosReader(daosObject, null);
     LinkedHashMap<Tuple2<Integer, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap = new LinkedHashMap<>();
     int shuffleId = 10;
     int reduceId = 1;

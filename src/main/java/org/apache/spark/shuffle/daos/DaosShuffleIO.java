@@ -66,12 +66,12 @@ public class DaosShuffleIO {
 
   public DaosShuffleIO(SparkConf conf) {
     this.conf = conf;
-    this.writeConfig = readWriteConfig();
+    this.writeConfig = readWriteConfig(conf);
     this.readerExes = createReaderExes();
     this.writerExes = createWriterExes();
   }
 
-  private DaosWriter.WriteConfig readWriteConfig() {
+  protected static DaosWriter.WriteConfig readWriteConfig(SparkConf conf) {
     DaosWriter.WriteConfig config = new DaosWriter.WriteConfig();
     config.warnSmallWrite((boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_WARN_SMALL_SIZE()));
     config.bufferSize((int) ((long)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_SINGLE_BUFFER_SIZE())
@@ -79,25 +79,25 @@ public class DaosShuffleIO {
     config.minSize((int) ((long)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_MINIMUM_SIZE()) * 1024));
     config.timeoutTimes((int)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_WAIT_DATA_TIMEOUT_TIMES()));
     config.waitTimeMs((int)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_WAIT_MS()));
-    config.totalInMemSize((long)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_MAX_BYTES_IN_FLIGHT()));
+    config.totalInMemSize((long)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_MAX_BYTES_IN_FLIGHT()) * 1024);
     config.totalSubmittedLimit((int)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_SUBMITTED_LIMIT()));
-    if (logger.isDebugEnabled()) {
-      logger.debug("write configs, " + config);
-    }
+    config.threads((int)conf.get(package$.MODULE$.SHUFFLE_DAOS_WRITE_THREADS()));
+    config.fromOtherThreads((boolean)conf
+        .get(package$.MODULE$.SHUFFLE_DAOS_WRITE_IN_OTHER_THREAD()));
+    logger.info("write configs, " + config);
     return config;
   }
 
   private BoundThreadExecutors createWriterExes() {
-    boolean fromOtherThread = (boolean)conf
-        .get(package$.MODULE$.SHUFFLE_DAOS_WRITE_IN_OTHER_THREAD());
-    if (fromOtherThread) {
+    if (writeConfig.isFromOtherThreads()) {
       BoundThreadExecutors executors;
-      int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_WRITE_THREADS().key(), -1);
+      int threads = writeConfig.getThreads();
       if (threads == -1) {
         threads = conf.getInt(SparkLauncher.EXECUTOR_CORES, 1);
       }
       executors = new BoundThreadExecutors("write_executors", threads,
           new DaosWriter.WriteThreadFactory());
+      logger.info("created BoundThreadExecutors with " + threads + " threads for write");
       return executors;
     }
     return null;
@@ -108,12 +108,13 @@ public class DaosShuffleIO {
         .get(package$.MODULE$.SHUFFLE_DAOS_READ_FROM_OTHER_THREAD());
     if (fromOtherThread) {
       BoundThreadExecutors executors;
-      int threads = conf.getInt(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS().key(), -1);
+      int threads = (int)conf.get(package$.MODULE$.SHUFFLE_DAOS_READ_THREADS());
       if (threads == -1) {
           threads = conf.getInt(SparkLauncher.EXECUTOR_CORES, 1);
       }
       executors = new BoundThreadExecutors("read_executors", threads,
           new DaosReader.ReadThreadFactory());
+      logger.info("created BoundThreadExecutors with " + threads + " threads for read");
       return executors;
     }
     return null;
@@ -145,7 +146,7 @@ public class DaosShuffleIO {
    * @param shuffleId
    * @param mapId
    * @return
-   * @throws IOException
+   * @throws {@link IOException}
    */
   public DaosWriter getDaosWriter(int numPartitions, int shuffleId, long mapId)
       throws IOException {

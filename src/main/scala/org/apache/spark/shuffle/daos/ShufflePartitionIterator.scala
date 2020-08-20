@@ -64,6 +64,8 @@ class ShufflePartitionIterator(
     inputStream = new DaosShuffleInputStream(daosReader, mapReduceIdMap,
       maxBytesInFlight, maxReqSizeShuffleToMem, shuffleMetrics)
     mapReduceIt = mapReduceIdMap.entrySet().iterator()
+    //todo
+    logInfo("hasNext? " + hasNext)
   }
 
   override def hasNext: Boolean = {

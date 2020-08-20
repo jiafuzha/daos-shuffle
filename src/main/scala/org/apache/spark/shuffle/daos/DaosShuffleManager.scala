@@ -101,7 +101,7 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   private[this] val taskIdMapsForShuffle = new ConcurrentHashMap[Int, OpenHashSet[Long]]()
 
   /**
-   * register [[ShuffleDependency]] to pass to tasks.
+   * register {@link ShuffleDependency} to pass to tasks.
    *
    * @param shuffleId
    * unique ID of shuffle in job
@@ -113,7 +113,7 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
    * type of VALUE
    * @tparam C
    * type of combined value
-   * @return [[BaseShuffleHandle]]
+   * @return {@link BaseShuffleHandle}
    */
   override def registerShuffle[K, V, C](
       shuffleId: Int,

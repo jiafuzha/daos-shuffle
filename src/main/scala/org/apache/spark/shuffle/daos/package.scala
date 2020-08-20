@@ -48,8 +48,8 @@ package object daos {
       .stringConf
       .createWithDefault("0")
 
-  val SHUFFLE_DAOS_PARTITION_BUFFER_SIZE =
-    ConfigBuilder("spark.shuffle.daos.partition.buffer")
+  val SHUFFLE_DAOS_WRITE_PARTITION_BUFFER_SIZE =
+    ConfigBuilder("spark.shuffle.daos.write.partition.buffer")
       .doc("Size of the in-memory buffer for each map partition output, in KiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.KiB)
@@ -57,8 +57,8 @@ package object daos {
         s"The map partition buffer size must be positive.")
       .createWithDefaultString("2048k")
 
-  val SHUFFLE_DAOS_BUFFER_SIZE =
-    ConfigBuilder("spark.shuffle.daos.buffer")
+  val SHUFFLE_DAOS_WRITE_BUFFER_SIZE =
+    ConfigBuilder("spark.shuffle.daos.write.buffer")
       .doc("Size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
@@ -66,8 +66,8 @@ package object daos {
         s"The total buffer size must be bigger than 50m.")
       .createWithDefaultString("800m")
 
-  val SHUFFLE_DAOS_BUFFER_INITIAL_SIZE =
-    ConfigBuilder("spark.shuffle.daos.buffer.initial")
+  val SHUFFLE_DAOS_WRITE_BUFFER_INITIAL_SIZE =
+    ConfigBuilder("spark.shuffle.daos.write.buffer.initial")
       .doc("Initial size of total in-memory buffer for each map output, in MiB")
       .version("3.0.0")
       .bytesConf(ByteUnit.MiB)
@@ -75,8 +75,8 @@ package object daos {
         s"The initial total buffer size must be bigger than 10m.")
       .createWithDefaultString("80m")
 
-  val SHUFFLE_DAOS_BUFFER_FORCE_WRITE_PCT =
-    ConfigBuilder("spark.shuffle.daos.buffer.write.percentage")
+  val SHUFFLE_DAOS_WRITE_BUFFER_FORCE_PCT =
+    ConfigBuilder("spark.shuffle.daos.write.buffer.percentage")
       .doc("percentage of spark.shuffle.daos.buffer. Force write some buffer data out when size is bigger than " +
         "spark.shuffle.daos.buffer * (this percentage)")
       .version("3.0.0")

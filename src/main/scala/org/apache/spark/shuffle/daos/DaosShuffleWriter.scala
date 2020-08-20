@@ -46,6 +46,7 @@ class DaosShuffleWriter[K, V, C](
   private val blockManager = SparkEnv.get.blockManager
 
   override def write(records: Iterator[Product2[K, V]]): Unit = {
+    val start = System.nanoTime()
     partitionsWriter = if (dep.mapSideCombine) {
       new MapPartitionsBuffer[K, V, C](
         handle.shuffleId,
@@ -70,6 +71,8 @@ class DaosShuffleWriter[K, V, C](
     }
     partitionsWriter.insertAll(records)
     val partitionLengths = partitionsWriter.commitAll
+
+    logInfo(context.taskAttemptId() + " all time: " + (System.nanoTime() - start)/1000000)
 
     if (log.isDebugEnabled()) {
       log.debug("mapId: " + mapId + ", partition lengths: " + partitionLengths.mkString(", "))

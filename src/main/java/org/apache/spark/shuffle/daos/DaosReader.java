@@ -94,7 +94,7 @@ public class DaosReader {
   }
 
   public void setReaderMap(Map<DaosReader, Integer> readerMap) {
-    readerMap.put(this, null);
+    readerMap.put(this, 0);
     this.readerMap = readerMap;
   }
 

@@ -88,6 +88,7 @@ class MapPartitionsBuffer[K, V, C](
 
   def insertAll(records: Iterator[Product2[K, V]]): Unit = {
     // TODO: stop combining if we find that the reduction factor isn't high
+    val start = System.nanoTime();
     val shouldCombine = aggregator.isDefined
     if (shouldCombine) {
       // Combine values in-memory first using our AppendOnlyMap
@@ -110,6 +111,7 @@ class MapPartitionsBuffer[K, V, C](
         writeBuffer.insert(getPartition(kv._1), kv._1, kv._2.asInstanceOf[C])
       }
     }
+    logInfo(context.taskAttemptId() + " insert time: " + (System.nanoTime() - start)/1000000)
   }
 
   def commitAll: Array[Long] = {
@@ -138,10 +140,10 @@ class MapPartitionsBuffer[K, V, C](
       val keyComparator: Option[Comparator[K]],
       val conf: SparkConf,
       val taskMemManager: TaskMemoryManager) extends MemoryConsumer(taskMemManager) {
-    private val partBufferThreshold = conf.get(SHUFFLE_DAOS_PARTITION_BUFFER_SIZE).toInt * 1024
-    private val totalBufferThreshold = conf.get(SHUFFLE_DAOS_BUFFER_SIZE).toInt * 1024 * 1024
-    private val totalBufferInitial = conf.get(SHUFFLE_DAOS_BUFFER_INITIAL_SIZE).toInt * 1024 * 1024
-    private val forceWritePct = conf.get(SHUFFLE_DAOS_BUFFER_FORCE_WRITE_PCT)
+    private val partBufferThreshold = conf.get(SHUFFLE_DAOS_WRITE_PARTITION_BUFFER_SIZE).toInt * 1024
+    private val totalBufferThreshold = conf.get(SHUFFLE_DAOS_WRITE_BUFFER_SIZE).toInt * 1024 * 1024
+    private val totalBufferInitial = conf.get(SHUFFLE_DAOS_WRITE_BUFFER_INITIAL_SIZE).toInt * 1024 * 1024
+    private val forceWritePct = conf.get(SHUFFLE_DAOS_WRITE_BUFFER_FORCE_PCT)
     private val totalWriteValve = totalBufferThreshold * forceWritePct
 
     if (log.isDebugEnabled()) {
@@ -238,13 +240,13 @@ class MapPartitionsBuffer[K, V, C](
     def changeValue(partitionId: Int, key: K, updateFunc: (Boolean, C) => C) = {
       val map = partitionMapArray(partitionId)
       val estSize = map.changeValue(key, updateFunc)
-      afterUpdate(estSize, map)
+//      afterUpdate(estSize, map)
     }
 
     def insert(partitionId: Int, key: K, value: C): Unit = {
       val buffer = partitionBufferArray(partitionId)
       val estSize = buffer.insert(key, value)
-      afterUpdate(estSize, buffer)
+//      afterUpdate(estSize, buffer)
     }
 
     def afterUpdate[T <: SizeAware[K, C] with Linked[K, C]](estSize: Long, buffer: T): Unit = {
@@ -289,8 +291,10 @@ class MapPartitionsBuffer[K, V, C](
 //    }
 
     def flushAll: Unit = {
+      val start = System.nanoTime()
       val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
       buffer.foreach(e => e.writeAndFlush)
+      logInfo(context.taskAttemptId() + " write/flush time: " + (System.nanoTime()-start)/1000000)
     }
 
     def close: Unit = {
@@ -406,8 +410,9 @@ class MapPartitionsBuffer[K, V, C](
 
     def changeValue(key: K, updateFunc: (Boolean, C) => C): Long = {
       map.changeValue(key, updateFunc)
-      val estSize = map.estimateSize()
-      afterUpdate(estSize)
+//      val estSize = map.estimateSize()
+//      afterUpdate(estSize)
+      0L
     }
 
     def reset: Unit = {
@@ -440,14 +445,19 @@ class MapPartitionsBuffer[K, V, C](
     taskMemoryManager: TaskMemoryManager,
     val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
-    private var buffer = new PairBuffer[K, C]
+    private var buffer = new PairBuffer[K, C] {
+      override protected def afterUpdate(): Unit = {
+
+      }
+    }
 
     def estimatedSize: Long = buffer.estimateSize()
 
     def insert(key: K, value: C): Long = {
       buffer.insert(key, value)
-      val estSize = buffer.estimateSize()
-      afterUpdate(estSize)
+//      val estSize = buffer.estimateSize()
+//      afterUpdate(estSize)
+      0L
     }
 
     def reset: Unit = {

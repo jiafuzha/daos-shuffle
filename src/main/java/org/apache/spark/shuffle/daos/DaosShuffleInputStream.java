@@ -232,7 +232,7 @@ public class DaosShuffleInputStream extends InputStream {
      * invoke this method when fromOtherThread is false.
      *
      * @return
-     * @throws IOException
+     * @throws {@link IOException}
      */
     public ByteBuf readBySelf() throws IOException {
       if (lastCtx != null) { // duplicated IODataDescs which were submitted to other thread, but cancelled
@@ -247,6 +247,8 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     public ByteBuf nextBuf() throws IOException {
+      //todo
+      log.info("nextBuf 1");
       ByteBuf buf = tryCurrentEntry();
       if (buf != null) {
         return buf;
@@ -481,15 +483,22 @@ public class DaosShuffleInputStream extends InputStream {
     }
 
     private ByteBuf getBySelf(IODataDesc desc, Tuple2<Integer, Integer> mapreduceId) throws IOException {
+      //todo
+      log.info("getBySelf 1");
       // get data by self, no need to release currentDesc
       if (desc == null) { // reach end
         return null;
       }
       boolean releaseBuf = false;
       try {
+        //todo
+        log.info("getBySelf 2, " + desc);
         object.fetch(desc);
+        //todo
+        log.info("getBySelf entryIdx " + entryIdx + ", actual size: " + desc.getEntry(entryIdx).getActualSize());
         currentDesc = desc;
         ByteBuf buf = validateLastEntryAndGetBuf(desc.getEntry(entryIdx));
+        log.info("buf is " + buf);
         lastMapReduceIdForReturn = mapreduceId;
         return buf;
       } catch (IOException | IllegalStateException e) {

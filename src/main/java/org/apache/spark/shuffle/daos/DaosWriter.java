@@ -55,11 +55,20 @@ public class DaosWriter extends TaskSubmitter {
 
   private NativeBuffer[] partitionBufArray;
 
+  private int totalTimeoutTimes;
+
+  private int totalWriteTimes;
+
+  private int totalBySelfTimes;
+
   private volatile boolean cleaned;
+
+  // TODO: remove
+  private long[] debugLens;
 
   private static Logger LOG = LoggerFactory.getLogger(DaosWriter.class);
 
-  public DaosWriter(WriteParam param, DaosObject object, BoundThreadExecutors.SingleThreadExecutor executor) {
+  public DaosWriter(DaosWriter.WriteParam param, DaosObject object, BoundThreadExecutors.SingleThreadExecutor executor) {
     super(executor);
     this.param = param;
     this.config = param.config;
@@ -103,10 +112,11 @@ public class DaosWriter extends TaskSubmitter {
       NativeBuffer nb = partitionBufArray[i];
       lens[i] = nb.totalSize;
       if (nb.roundSize != 0 || !nb.bufList.isEmpty()) {
-        throw new IllegalStateException("round size should be 0, " + nb.roundSize + ", buflist shoud be empty, " +
+        throw new IllegalStateException("round size should be 0, " + nb.roundSize + ", buflist should be empty, " +
             nb.bufList.size());
       }
     }
+    debugLens = lens;
     return lens;
   }
 
@@ -119,10 +129,31 @@ public class DaosWriter extends TaskSubmitter {
     if (desc == null) {
       return;
     }
+    totalWriteTimes++;
     if (config.warnSmallWrite && buffer.roundSize < config.minSize) {
       LOG.warn("too small partition size {}, shuffle {}, map {}, partition {}",
           buffer.roundSize, param.shuffleId, mapId, partitionId);
     }
+    if (executor == null) { // run write by self
+      runBySelf(desc, buffer);
+      return;
+    }
+    submitToOtherThreads(desc, buffer);
+  }
+
+  private void runBySelf(IODataDesc desc, NativeBuffer buffer) throws IOException {
+    totalBySelfTimes++;
+    try {
+      object.update(desc);
+    } catch (IOException e) {
+      throw new IOException("failed to write partition of " + desc, e);
+    } finally {
+      desc.release();
+      buffer.reset(true);
+    }
+  }
+
+  private void submitToOtherThreads(IODataDesc desc, NativeBuffer buffer) throws IOException {
     // move forward to release write buffers
     moveForward(true);
     // check if we need to wait submitted tasks to be executed
@@ -142,19 +173,24 @@ public class DaosWriter extends TaskSubmitter {
             LOG.debug("wait daos write timeout times: " + timeoutTimes);
           }
           if (timeoutTimes >= config.timeoutTimes) {
-            String msg = "fail this task due to too many times of timeout (" + timeoutTimes + ") when try to submit" +
-                " write task for " + desc;
-            desc.release();
-            close(false);
-            throw new IOException(msg);
+            totalTimeoutTimes += timeoutTimes;
+            runBySelf(desc, buffer);
+            return;
+//            String msg = "fail this task due to too many times of timeout (" + timeoutTimes + ") when try to submit" +
+//                " write task for " + desc;
+//            desc.release();
+//            close(false);
+//            throw new IOException(msg);
           }
         }
       }
     } catch (InterruptedException e) {
       desc.release();
+      Thread.currentThread().interrupt();
       throw new IOException("interrupted when wait daos write", e);
     }
     // submit write task after some wait
+    totalTimeoutTimes += timeoutTimes;
     submitAndReset(desc, buffer);
   }
 
@@ -166,7 +202,7 @@ public class DaosWriter extends TaskSubmitter {
     try {
       submit(desc, buffer.bufList);
     } finally {
-      buffer.reset();
+      buffer.reset(false);
     }
   }
 
@@ -188,8 +224,15 @@ public class DaosWriter extends TaskSubmitter {
 
   private void close(boolean force) {
     if (partitionBufArray != null) {
+      waitCompletion(force);
+      // TODO: remove
+      verifyWritten();
       partitionBufArray = null;
       object = null;
+      //TODO -> debug
+      LOG.info("total writes: " + totalWriteTimes +", total timeout times: " + totalTimeoutTimes +
+          ", total write-by-self times: " + totalBySelfTimes +", total timeout times/total writes: " +
+          ((float)totalTimeoutTimes) / totalWriteTimes);
     }
     cleanup(force);
     if (writerMap != null && (force || cleaned)) {
@@ -198,8 +241,46 @@ public class DaosWriter extends TaskSubmitter {
     }
   }
 
+  private void verifyWritten() {
+      for (int i = 0; i < debugLens.length; i++) {
+        IODataDesc desc = null;
+        try {
+          IODataDesc.Entry entry = IODataDesc.createEntryForFetch(mapId, IODataDesc.IodType.ARRAY, 1, 0, (int) debugLens[i]);
+          List<IODataDesc.Entry> list = new ArrayList<>();
+          list.add(entry);
+          desc = object.createDataDescForFetch(String.valueOf(i), list);
+          LOG.info("verifying desc: " + desc);
+          object.fetch(desc);
+          if (desc.getEntry(0).getActualSize() != debugLens[i]) {
+            LOG.error(desc.getEntry(0).getActualSize() + " != " + debugLens[i]);
+          }
+        } catch (IOException e) {
+          LOG.error("failed to verify ", e);
+        } finally {
+          if (desc != null) {
+            desc.release();
+          }
+        }
+      }
+
+  }
+
+  private void waitCompletion(boolean force) {
+    if (!force) {
+      return;
+    }
+    try {
+      while (totalSubmitted > 0) {
+        boolean timeout = waitForCondition(config.waitTimeMs);
+        moveForward(timeout);
+      }
+    } catch (Exception e) {
+      LOG.error("failed to wait completion of daos writing", e);
+    }
+  }
+
   public void setWriterMap(Map<DaosWriter, Integer> writerMap) {
-    writerMap.put(this, null);
+    writerMap.put(this, 0);
     this.writerMap = writerMap;
   }
 
@@ -214,7 +295,7 @@ public class DaosWriter extends TaskSubmitter {
   }
 
   @Override
-  protected boolean validateReturned(LinkedTaskContext context) throws IOException {
+  protected boolean validateReturned(LinkedTaskContext context) {
     return false;
   }
 
@@ -321,8 +402,11 @@ public class DaosWriter extends TaskSubmitter {
       return object.createDataDescForUpdate(partitionIdKey, entries);
     }
 
-    public void reset() {
-      // buffers will be released when tasks are executed and consumed
+    public void reset(boolean release) {
+      if (release) {
+        bufList.forEach(b -> b.release());
+      }
+      // release==false, buffers will be released when tasks are executed and consumed
       bufList.clear();
       idx = -1;
       totalSize += roundSize;
@@ -343,6 +427,8 @@ public class DaosWriter extends TaskSubmitter {
     private int timeoutTimes;
     private long totalInMemSize;
     private int totalSubmittedLimit;
+    private int threads;
+    private boolean fromOtherThreads;
 
     public WriteConfig bufferSize(int bufferSize) {
       this.bufferSize = bufferSize;
@@ -379,6 +465,52 @@ public class DaosWriter extends TaskSubmitter {
       return this;
     }
 
+    public WriteConfig threads(int threads) {
+      this.threads = threads;
+      return this;
+    }
+
+    public WriteConfig fromOtherThreads(boolean fromOtherThreads) {
+      this.fromOtherThreads = fromOtherThreads;
+      return this;
+    }
+
+    public int getBufferSize() {
+      return bufferSize;
+    }
+
+    public int getMinSize() {
+      return minSize;
+    }
+
+    public boolean isWarnSmallWrite() {
+      return warnSmallWrite;
+    }
+
+    public long getWaitTimeMs() {
+      return waitTimeMs;
+    }
+
+    public int getTimeoutTimes() {
+      return timeoutTimes;
+    }
+
+    public long getTotalInMemSize() {
+      return totalInMemSize;
+    }
+
+    public int getTotalSubmittedLimit() {
+      return totalSubmittedLimit;
+    }
+
+    public int getThreads() {
+      return threads;
+    }
+
+    public boolean isFromOtherThreads() {
+      return fromOtherThreads;
+    }
+
     @Override
     public String toString() {
       return "WriteConfig{" +
@@ -389,6 +521,8 @@ public class DaosWriter extends TaskSubmitter {
           ", timeoutTimes=" + timeoutTimes +
           ", totalInMemSize=" + totalInMemSize +
           ", totalSubmittedLimit=" + totalSubmittedLimit +
+          ", threads=" + threads +
+          ", fromOtherThreads=" + fromOtherThreads +
           '}';
     }
   }

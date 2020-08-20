@@ -127,7 +127,7 @@ public class BoundThreadExecutors {
           try {
             runnable.run();
           } catch (Exception e) {
-            logger.info("failed to run " + runnable);
+            logger.info("failed to run " + runnable, e);
           }
         }
       } catch (InterruptedException e) {

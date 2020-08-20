@@ -51,7 +51,8 @@ class DaosShuffleReaderSuite extends SparkFunSuite with LocalSparkContext {
   (DaosReader, DaosShuffleIO, DaosObject) = {
     // mock
     val daosObject = Mockito.mock(classOf[DaosObject])
-    val daosReader: DaosReader = if (fromOtherThread) Mockito.spy(new DaosReader(daosObject)) else Mockito.mock(classOf[DaosReader])
+    val daosReader: DaosReader =
+      if (fromOtherThread) Mockito.spy(new DaosReader(daosObject, null)) else Mockito.mock(classOf[DaosReader])
     val argumentCaptor = ArgumentCaptor.forClass(classOf[java.util.List[IODataDesc.Entry]])
     val shuffleIO = Mockito.mock(classOf[DaosShuffleIO])
     val descList = new util.ArrayList[IODataDesc]

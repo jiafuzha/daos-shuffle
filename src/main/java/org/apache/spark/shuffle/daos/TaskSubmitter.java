@@ -37,7 +37,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public abstract class TaskSubmitter {
-  private final BoundThreadExecutors.SingleThreadExecutor executor;
+  protected final BoundThreadExecutors.SingleThreadExecutor executor;
 
   protected LinkedTaskContext headCtx;
   protected LinkedTaskContext currentCtx;
@@ -72,7 +72,7 @@ public abstract class TaskSubmitter {
    *
    * @param waitDataTimeMs
    * @return true for timeout, false otherwise.
-   * @throws InterruptedException
+   * @throws {@link InterruptedException}
    */
   protected boolean waitForCondition(long waitDataTimeMs) throws InterruptedException {
     lock.lockInterruptibly();
@@ -167,7 +167,7 @@ public abstract class TaskSubmitter {
         ctx.cancel();
       }
       allReleased &= cleanupTaskContext(ctx, force);
-      ctx = currentCtx.next;
+      ctx = ctx.getNext();
     }
     return allReleased;
   }

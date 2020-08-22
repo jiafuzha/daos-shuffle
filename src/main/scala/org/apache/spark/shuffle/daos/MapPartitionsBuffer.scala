@@ -111,7 +111,7 @@ class MapPartitionsBuffer[K, V, C](
         writeBuffer.insert(getPartition(kv._1), kv._1, kv._2.asInstanceOf[C])
       }
     }
-    logInfo(context.taskAttemptId() + " insert time: " + (System.nanoTime() - start)/1000000)
+    // logInfo(context.taskAttemptId() + " insert time: " + (System.nanoTime() - start)/1000000)
   }
 
   def commitAll: Array[Long] = {
@@ -294,7 +294,7 @@ class MapPartitionsBuffer[K, V, C](
       val start = System.nanoTime()
       val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
       buffer.foreach(e => e.writeAndFlush)
-      logInfo(context.taskAttemptId() + " write/flush time: " + (System.nanoTime()-start)/1000000)
+      // logInfo(context.taskAttemptId() + " write/flush time: " + (System.nanoTime()-start)/1000000)
     }
 
     def close: Unit = {

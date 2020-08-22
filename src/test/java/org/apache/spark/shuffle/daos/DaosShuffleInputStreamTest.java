@@ -291,12 +291,12 @@ public class DaosShuffleInputStreamTest {
     BoundThreadExecutors executors = new BoundThreadExecutors("read_executors", 1,
         new DaosReader.ReadThreadFactory());
     DaosReader daosReader = new DaosReader(daosObject, executors);
-    LinkedHashMap<Tuple2<Integer, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap = new LinkedHashMap<>();
+    LinkedHashMap<Tuple2<Long, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap = new LinkedHashMap<>();
     int shuffleId = 10;
     int reduceId = 1;
     int size = (int)(minSize + 5) * 1024;
     for (int i = 0; i < maps; i++) {
-      partSizeMap.put(new Tuple2<>(i, 10), new Tuple3<>(Long.valueOf(size), new ShuffleBlockId(shuffleId, i, reduceId),
+      partSizeMap.put(new Tuple2<>(Long.valueOf(i), 10), new Tuple3<>(Long.valueOf(size), new ShuffleBlockId(shuffleId, i, reduceId),
           BlockManagerId.apply("1", "localhost", 2, Option.empty())));
     }
 

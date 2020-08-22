@@ -72,11 +72,8 @@ class DaosShuffleWriter[K, V, C](
     partitionsWriter.insertAll(records)
     val partitionLengths = partitionsWriter.commitAll
 
-    logInfo(context.taskAttemptId() + " all time: " + (System.nanoTime() - start)/1000000)
+    // logInfo(context.taskAttemptId() + " all time: " + (System.nanoTime() - start)/1000000)
 
-    if (log.isDebugEnabled()) {
-      log.debug("mapId: " + mapId + ", partition lengths: " + partitionLengths.mkString(", "))
-    }
     mapStatus = MapStatus(blockManager.shuffleServerId, partitionLengths, mapId)
   }
 

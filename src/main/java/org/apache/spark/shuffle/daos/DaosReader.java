@@ -151,8 +151,8 @@ public class DaosReader {
       return (ReadTaskContext) next;
     }
 
-    public Tuple2<Integer, Integer> getMapReduceId() {
-      return (Tuple2<Integer, Integer>) morePara;
+    public Tuple2<Long, Integer> getMapReduceId() {
+      return (Tuple2<Long, Integer>) morePara;
     }
   }
 

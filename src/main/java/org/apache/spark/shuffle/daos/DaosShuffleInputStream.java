@@ -69,8 +69,8 @@ public class DaosShuffleInputStream extends InputStream {
   private boolean completed;
 
   // ensure the order of partition
-  private LinkedHashMap<Tuple2<Integer, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap;
-  private Iterator<Tuple2<Integer, Integer>> mapIdIt;
+  private LinkedHashMap<Tuple2<Long, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap;
+  private Iterator<Tuple2<Long, Integer>> mapIdIt;
 
   private BufferSource source;
 
@@ -78,7 +78,7 @@ public class DaosShuffleInputStream extends InputStream {
 
   public DaosShuffleInputStream(
       DaosReader reader,
-      LinkedHashMap<Tuple2<Integer, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap,
+      LinkedHashMap<Tuple2<Long, Integer>, Tuple3<Long, BlockId, BlockManagerId>> partSizeMap,
       long maxBytesInFlight, long maxMem, ShuffleReadMetricsReporter metrics) {
     this.partSizeMap = partSizeMap;
     this.reader = reader;
@@ -108,7 +108,7 @@ public class DaosShuffleInputStream extends InputStream {
     return partSizeMap.get(source.lastMapReduceIdForSubmit)._3();
   }
 
-  public int getCurMapIndex() {
+  public long getCurMapIndex() {
     if (source.lastMapReduceIdForSubmit == null) {
       return -1;
     }
@@ -215,9 +215,9 @@ public class DaosShuffleInputStream extends InputStream {
     private long currentPartSize;
 
     private int entryIdx;
-    private Tuple2<Integer, Integer> curMapReduceId;
-    private Tuple2<Integer, Integer> lastMapReduceIdForSubmit;
-    private Tuple2<Integer, Integer> lastMapReduceIdForReturn;
+    private Tuple2<Long, Integer> curMapReduceId;
+    private Tuple2<Long, Integer> lastMapReduceIdForSubmit;
+    private Tuple2<Long, Integer> lastMapReduceIdForReturn;
     private int curOffset;
     private boolean newMap;
 
@@ -235,27 +235,29 @@ public class DaosShuffleInputStream extends InputStream {
      * @throws {@link IOException}
      */
     public ByteBuf readBySelf() throws IOException {
-      if (lastCtx != null) { // duplicated IODataDescs which were submitted to other thread, but cancelled
-        ByteBuf buf = readDuplicated();
-        if (buf != null) {
-          return buf;
-        }
-      }
+//      if (lastCtx != null) { // duplicated IODataDescs which were submitted to other thread, but cancelled
+//        ByteBuf buf = readDuplicated();
+//        if (buf != null) {
+//          return buf
+//        }
+//      }
       // all submitted were duplicated. Now start from mapId iterator.
       IODataDesc desc = createNextDesc(config.maxBytesInFlight);
       return getBySelf(desc, lastMapReduceIdForSubmit);
     }
 
     public ByteBuf nextBuf() throws IOException {
-      //todo
-      log.info("nextBuf 1");
+//      log.info("nextBuf -> current desc1: " + currentDesc);
+//      log.info("nextBuf -> current entry1: " + currentEntry +", entry index: " + entryIdx);
       ByteBuf buf = tryCurrentEntry();
       if (buf != null) {
+//        log.info("nextBuf -> current entry2: " + currentEntry +", entry index: " + entryIdx);
         return buf;
       }
       // next entry
       buf = tryCurrentDesc();
       if (buf != null) {
+//        log.info("nextBuf -> current desc2: " + currentDesc);
         return buf;
       }
       // from next partition
@@ -279,7 +281,8 @@ public class DaosShuffleInputStream extends InputStream {
           return validateLastEntryAndGetBuf(desc.getEntry(entryIdx));
         }
         // duplicate and get data by self
-        return readDuplicated();
+//        return readDuplicated();
+        return null;
       } catch (InterruptedException e) {
         throw new IOException("read interrupted.", e);
       }
@@ -291,31 +294,31 @@ public class DaosShuffleInputStream extends InputStream {
      * @return
      * @throws IOException
      */
-    private ByteBuf readDuplicated() throws IOException {
-      // in case no even single return from other thread
-      // check selfCurrentCtx since the wait could span multiple contexts/descs
-      DaosReader.ReadTaskContext curCtx = selfCurrentCtx == null ?
-          getCurrentCtx() : selfCurrentCtx;
-      DaosReader.ReadTaskContext context;
-      if (curCtx == null) {
-        context = getHeadCtx();
-      } else {
-        lastMapReduceIdForReturn = curCtx.getMapReduceId();
-        // no consumedStack push and no totalInMemSize and totalSubmitted update
-        // since they will be updated when the task context finally returned
-        context = curCtx.getNext();
-        if (context == null) {
-          if (!fromOtherThread) {
-            lastCtx = null;
-          }
-          return null;
-        }
-      }
-      IODataDesc newDesc = context.getDesc().duplicate();
-      ByteBuf buf = getBySelf(newDesc, context.getMapReduceId());
-      selfCurrentCtx = context;
-      return buf;
-    }
+//    private ByteBuf readDuplicated() throws IOException {
+//      // in case no even single return from other thread
+//      // check selfCurrentCtx since the wait could span multiple contexts/descs
+//      DaosReader.ReadTaskContext curCtx = selfCurrentCtx == null ?
+//          getCurrentCtx() : selfCurrentCtx;
+//      DaosReader.ReadTaskContext context;
+//      if (curCtx == null) {
+//        context = getHeadCtx();
+//      } else {
+//        lastMapReduceIdForReturn = curCtx.getMapReduceId();
+//        // no consumedStack push and no totalInMemSize and totalSubmitted update
+//        // since they will be updated when the task context finally returned
+//        context = curCtx.getNext();
+//        if (context == null) {
+//          if (!fromOtherThread) {
+//            lastCtx = null;
+//          }
+//          return null;
+//        }
+//      }
+//      IODataDesc newDesc = context.getDesc().duplicate();
+//      ByteBuf buf = getBySelf(newDesc, context.getMapReduceId());
+//      selfCurrentCtx = context;
+//      return buf;
+//    }
 
     private IODataDesc tryGetFromOtherThread() throws InterruptedException, IOException {
       IODataDesc desc = tryGetValidCompleted(true);
@@ -332,18 +335,18 @@ public class DaosShuffleInputStream extends InputStream {
         return desc;
       }
       // check wait times and cancel task
-      boolean cancelAll = false;
-      if (exceedWaitTimes >= config.waitTimeoutTimes) {
-        fromOtherThread = false;
-        log.warn("stop reading from dedicated read thread");
-        cancelAll = true;
-      } else {
-        // try again
-        desc = tryGetValidCompleted(true);
-        if (desc != null) {
-          return desc;
-        }
-      }
+      boolean cancelAll = true;
+//      if (exceedWaitTimes >= config.waitTimeoutTimes) {
+//        fromOtherThread = false;
+//        log.warn("stop reading from dedicated read thread");
+//        cancelAll = true;
+//      } else {
+//        // try again
+//        desc = tryGetValidCompleted(true);
+//        if (desc != null) {
+//          return desc;
+//        }
+//      }
       // cancel tasks
       cancelTasks(cancelAll);
       return null;
@@ -360,7 +363,10 @@ public class DaosShuffleInputStream extends InputStream {
           if (log.isDebugEnabled()) {
             log.debug("exceed wait: {}ms, times: {}", config.waitDataTimeMs, exceedWaitTimes);
           }
-          return null;
+          if (exceedWaitTimes >= config.waitTimeoutTimes) {
+            throw new IOException("too many wait timeout times, " + exceedWaitTimes);
+          }
+          continue;
         }
         // get some results after wait
         desc = tryGetValidCompleted(false);
@@ -398,6 +404,8 @@ public class DaosShuffleInputStream extends InputStream {
         }
       }
       currentDesc = desc;
+      //TODO:
+//      log.info("validateReturned -> desc: " + currentDesc + ", current enty: " + currentEntry + ", entry index: " + entryIdx);
       return true;
     }
 
@@ -446,7 +454,7 @@ public class DaosShuffleInputStream extends InputStream {
       entryIdx = 0;
       // fetch the next by self
       IODataDesc desc = createNextDesc(selfReadLimit);
-      Tuple2<Integer, Integer> mapreduceId = lastMapReduceIdForSubmit;
+      Tuple2<Long, Integer> mapreduceId = lastMapReduceIdForSubmit;
       try {
         if (fromOtherThread) {
           submitMore();
@@ -482,23 +490,18 @@ public class DaosShuffleInputStream extends InputStream {
       return new DaosReader.ReadTaskContext(object, counter, lock, condition, desc, morePara);
     }
 
-    private ByteBuf getBySelf(IODataDesc desc, Tuple2<Integer, Integer> mapreduceId) throws IOException {
-      //todo
-      log.info("getBySelf 1");
+    private ByteBuf getBySelf(IODataDesc desc, Tuple2<Long, Integer> mapreduceId) throws IOException {
       // get data by self, no need to release currentDesc
       if (desc == null) { // reach end
         return null;
       }
       boolean releaseBuf = false;
       try {
-        //todo
-        log.info("getBySelf 2, " + desc);
         object.fetch(desc);
-        //todo
-        log.info("getBySelf entryIdx " + entryIdx + ", actual size: " + desc.getEntry(entryIdx).getActualSize());
         currentDesc = desc;
+        //TODO:
+//        log.info("getBySelf: " + desc);
         ByteBuf buf = validateLastEntryAndGetBuf(desc.getEntry(entryIdx));
-        log.info("buf is " + buf);
         lastMapReduceIdForReturn = mapreduceId;
         return buf;
       } catch (IOException | IllegalStateException e) {
@@ -513,7 +516,7 @@ public class DaosShuffleInputStream extends InputStream {
       List<IODataDesc.Entry> entries = new ArrayList<>();
       long remaining = sizeLimit;
       int reduceId = -1;
-      int mapId;
+      long mapId;
       while (remaining > 0) {
         nextMapReduceId();
         if (curMapReduceId == null) {
@@ -556,7 +559,7 @@ public class DaosShuffleInputStream extends InputStream {
       }
     }
 
-    private IODataDesc.Entry createEntry(int mapId, long offset, long readSize) throws IOException {
+    private IODataDesc.Entry createEntry(long mapId, long offset, long readSize) throws IOException {
       return IODataDesc.createEntryForFetch(String.valueOf(mapId), IODataDesc.IodType.ARRAY, 1, (int)offset,
           (int)readSize);
     }

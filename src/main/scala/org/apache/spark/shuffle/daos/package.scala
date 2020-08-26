@@ -48,6 +48,13 @@ package object daos {
       .stringConf
       .createWithDefault("0")
 
+  val SHUFFLE_DAOS_REMOVE_SHUFFLE_DATA =
+    ConfigBuilder("spark.shuffle.remove.shuffle.data")
+      .doc("remove shuffle data from DAOS after shuffle completed. Default is true")
+      .version("3.0.0")
+      .booleanConf
+      .createWithDefault(true)
+
   val SHUFFLE_DAOS_WRITE_PARTITION_BUFFER_SIZE =
     ConfigBuilder("spark.shuffle.daos.write.partition.buffer")
       .doc("Size of the in-memory buffer for each map partition output, in KiB")

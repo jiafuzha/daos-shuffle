@@ -63,9 +63,6 @@ public class DaosWriter extends TaskSubmitter {
 
   private volatile boolean cleaned;
 
-  // TODO: remove
-//  private long[] debugLens;
-
   private static Logger LOG = LoggerFactory.getLogger(DaosWriter.class);
 
   public DaosWriter(DaosWriter.WriteParam param, DaosObject object, BoundThreadExecutors.SingleThreadExecutor executor) {
@@ -174,13 +171,13 @@ public class DaosWriter extends TaskSubmitter {
           }
           if (timeoutTimes >= config.timeoutTimes) {
             totalTimeoutTimes += timeoutTimes;
-//            runBySelf(desc, buffer);
-//            return;
-            String msg = "fail this task due to too many times of timeout (" + timeoutTimes + ") when try to submit" +
-                " write task for " + desc;
-            desc.release();
-            close(false);
-            throw new IOException(msg);
+            runBySelf(desc, buffer);
+            return;
+//            String msg = "fail this task due to too many times of timeout (" + timeoutTimes + ") when try to submit" +
+//                " write task for " + desc;
+//            desc.release();
+//            close(false);
+//            throw new IOException(msg);
           }
         }
       }
@@ -199,18 +196,10 @@ public class DaosWriter extends TaskSubmitter {
   }
 
   private void submitAndReset(IODataDesc desc, NativeBuffer buffer) {
-//    //TODO : revmoe
-//    if (buffer.bufList.size() > 1) {
-//      throw new IllegalStateException("should be 1, but " + buffer.bufList.size());
-//    }
-//    buffer.writtenBuf = buffer.bufList.get(0);
-//    buffer.writtenBuf.retain();
-    //------
     try {
       submit(desc, buffer.bufList);
     } finally {
       buffer.reset(false);
-
     }
   }
 
@@ -260,46 +249,7 @@ public class DaosWriter extends TaskSubmitter {
     } catch (Exception e) {
       LOG.error("failed to wait completion of daos writing", e);
     }
-//    //TODO
-//    verifyWritten();
   }
-
-//  private void verifyWritten() {
-//    for (int i = 0; i < debugLens.length; i++) {
-//      IODataDesc desc = null;
-//      ByteBuf writtenBuf = null;
-//      try {
-//        IODataDesc.Entry entry = IODataDesc.createEntryForFetch(mapId, IODataDesc.IodType.ARRAY, 1, 0, (int) debugLens[i]);
-//        List<IODataDesc.Entry> list = new ArrayList<>();
-//        list.add(entry);
-//        desc = object.createDataDescForFetch(String.valueOf(i), list);
-//        LOG.info("verifying desc: " + desc);
-//        object.fetch(desc);
-//        if (desc.getEntry(0).getActualSize() != debugLens[i]) {
-//          throw new IllegalStateException(desc.getEntry(0).getActualSize() + " != " + debugLens[i]);
-//        }
-//        writtenBuf = partitionBufArray[i].writtenBuf;
-//        ByteBuf readBuf = desc.getEntry(0).getFetchedData();
-//        for (int j = 0; j < debugLens[i]; j++) {
-//          byte wb = writtenBuf.readByte();
-//          byte rb = readBuf.readByte();
-//          if (wb != rb) {
-//            throw new IllegalStateException("verification failed at " + j +", written is " + (int)wb + ", read is " + (int)rb);
-//          }
-//        }
-//
-//      } catch (IOException e) {
-//        LOG.error("failed to verify ", e);
-//      } finally {
-//        if (desc != null) {
-//          desc.release();
-//        }
-//        if (writtenBuf != null) {
-//          writtenBuf.release();
-//        }
-//      }
-//    }
-//  }
 
   public void setWriterMap(Map<DaosWriter, Integer> writerMap) {
     writerMap.put(this, 0);
@@ -322,11 +272,12 @@ public class DaosWriter extends TaskSubmitter {
   }
 
   @Override
-  protected void consumed(LinkedTaskContext context) {
+  protected boolean consumed(LinkedTaskContext context) {
     // release write buffers
     List<ByteBuf> bufList = (List<ByteBuf>) context.morePara;
     bufList.forEach(b -> b.release());
     bufList.clear();
+    return true;
   }
 
   /**
@@ -340,9 +291,6 @@ public class DaosWriter extends TaskSubmitter {
     private List<ByteBuf> bufList = new ArrayList<>();
     private long totalSize;
     private long roundSize;
-
-    //TODO: remove
-    private ByteBuf writtenBuf;
 
     public NativeBuffer(int partitionId, int bufferSize) {
       this.partitionId = partitionId;

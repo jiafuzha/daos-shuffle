@@ -124,9 +124,10 @@ public abstract class TaskSubmitter {
 
   private boolean consume() throws IOException {
     if (currentCtx != null) {
-      consumed(currentCtx);
       totalInMemSize -= currentCtx.getDesc().getTotalRequestSize();
-      consumedStack.offer(currentCtx);
+      if (consumed(currentCtx)) { // no context reuse since selfCurrentCtx could reference it
+        consumedStack.offer(currentCtx);
+      }
       currentCtx = currentCtx.getNext();
     } else { // returned first time
       currentCtx = headCtx;
@@ -137,15 +138,10 @@ public abstract class TaskSubmitter {
 
   protected abstract boolean validateReturned(LinkedTaskContext context) throws IOException;
 
-  protected abstract void consumed(LinkedTaskContext context);
+  protected abstract boolean consumed(LinkedTaskContext context);
 
   protected void cancelTasks(boolean cancelAll) {
-    LinkedTaskContext ctx = currentCtx;
-    if (ctx == null) {
-      ctx = getHeadCtx();
-    } else {
-      ctx = ctx.getNext();
-    }
+    LinkedTaskContext ctx = getNextNonReturnedCtx();
     if (ctx == null) { // reach to end
       return;
     }
@@ -157,6 +153,14 @@ public abstract class TaskSubmitter {
         ctx = ctx.getNext();
       }
     }
+  }
+
+  protected LinkedTaskContext getNextNonReturnedCtx() {
+    LinkedTaskContext ctx = currentCtx;
+    if (ctx == null) {
+      return getHeadCtx();
+    }
+    return ctx.getNext();
   }
 
   protected boolean cleanupSubmitted(boolean force) {

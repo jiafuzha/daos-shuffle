@@ -50,6 +50,8 @@ public class DaosShuffleIO {
 
   private String ranks;
 
+  private boolean removeShuffleData;
+
   private DaosWriter.WriteConfig writeConfig;
 
   private Map<DaosReader, Integer> readerMap = new ConcurrentHashMap<>();
@@ -69,6 +71,7 @@ public class DaosShuffleIO {
     this.writeConfig = readWriteConfig(conf);
     this.readerExes = createReaderExes();
     this.writerExes = createWriterExes();
+    this.removeShuffleData = (boolean)conf.get(package$.MODULE$.SHUFFLE_DAOS_REMOVE_SHUFFLE_DATA());
   }
 
   protected static DaosWriter.WriteConfig readWriteConfig(SparkConf conf) {
@@ -209,7 +212,9 @@ public class DaosShuffleIO {
     try {
       DaosObject object = objectMap.remove(getKey(appId, shuffleId));
       if (object != null) {
-        object.punch();
+        if (removeShuffleData) {
+          object.punch();
+        }
         object.close();
       }
     } catch (Exception e) {

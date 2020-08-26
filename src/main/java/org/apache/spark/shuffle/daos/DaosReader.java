@@ -126,8 +126,8 @@ public class DaosReader {
       } catch (Exception e) {
         log.error("failed to read for " + context.desc, e);
       } finally {
-        context.signal();
         context.desc.release(cancelled);
+        context.signal();
         context = null;
         handle.recycle(this);
       }

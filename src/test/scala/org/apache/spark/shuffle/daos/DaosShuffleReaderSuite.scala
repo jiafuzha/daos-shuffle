@@ -73,7 +73,7 @@ class DaosShuffleReaderSuite extends SparkFunSuite with LocalSparkContext {
       val desc = descList.get(i)
       doNothing().when(daosObject).fetch(desc)
       when(desc.getNbrOfEntries()).thenReturn(1)
-      when(desc.succeeded()).thenReturn(true)
+      when(desc.isSucceeded()).thenReturn(true)
       when(desc.getTotalRequestSize).thenReturn(byteOutputStream.toByteArray.length)
       val entry = Mockito.mock(classOf[IODataDesc.Entry])
       when(desc.getEntry(0)).thenReturn(entry)

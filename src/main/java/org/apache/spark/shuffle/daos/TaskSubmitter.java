@@ -192,7 +192,7 @@ public abstract class TaskSubmitter {
       return true;
     }
     IODataDesc desc = ctx.getDesc();
-    if (desc != null && (force || desc.succeeded())) {
+    if (desc != null && (force || desc.isSucceeded())) {
       desc.release();
       return true;
     }

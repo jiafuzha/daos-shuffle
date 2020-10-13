@@ -33,8 +33,8 @@ import org.apache.spark.util.collection.SizeTracker
  * @tparam K
  * @tparam V
  */
-class PairBuffer[K, V](initialCapacity: Int = 64) extends SizeTracker {
-  import PairBuffer._
+class SizeSamplerPairBuffer[K, V](val stat: SampleStat, initialCapacity: Int = 64) extends SizeSampler {
+  import SizeSamplerPairBuffer._
 
   require(initialCapacity <= MAXIMUM_CAPACITY,
     s"Can't make capacity bigger than ${MAXIMUM_CAPACITY} elements")
@@ -45,6 +45,9 @@ class PairBuffer[K, V](initialCapacity: Int = 64) extends SizeTracker {
   private var capacity = initialCapacity
   private var curSize = 0
   private var data = new Array[AnyRef](2 * initialCapacity)
+
+  setSampleStat(stat)
+  resetSamples()
 
   /** Add an element into the buffer */
   def insert(key: K, value: V): Unit = {
@@ -58,7 +61,7 @@ class PairBuffer[K, V](initialCapacity: Int = 64) extends SizeTracker {
   }
 
   /** Double the size of the array because we've reached capacity */
-  private def growArray(): Unit = {
+  protected def growArray(): Unit = {
     if (capacity >= MAXIMUM_CAPACITY) {
       throw new IllegalStateException(s"Can't insert more than ${MAXIMUM_CAPACITY} elements")
     }
@@ -91,6 +94,6 @@ class PairBuffer[K, V](initialCapacity: Int = 64) extends SizeTracker {
   }
 }
 
-private object PairBuffer {
+private object SizeSamplerPairBuffer {
   val MAXIMUM_CAPACITY: Int = ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH / 2
 }

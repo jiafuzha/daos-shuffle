@@ -407,7 +407,7 @@ public class DaosShuffleInputStream extends InputStream {
       selfCurrentCtx = null; // non-cancelled currentCtx overrides selfCurrentCtx
       lastMapReduceIdForReturn = ((DaosReader.ReadTaskContext)context).getMapReduceId();
       IODataDesc desc = context.getDesc();
-      if (!desc.succeeded()) {
+      if (!desc.isSucceeded()) {
         String msg = "failed to get data from DAOS, desc: " + desc.toString(4096);
         if (desc.getCause() != null) {
           throw new IOException(msg, desc.getCause());

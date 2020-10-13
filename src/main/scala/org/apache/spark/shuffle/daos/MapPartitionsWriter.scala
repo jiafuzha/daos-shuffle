@@ -31,7 +31,7 @@ import org.apache.spark.memory.{MemoryConsumer, TaskMemoryManager}
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.util.collection.SizeTrackingAppendOnlyMap
 
-class MapPartitionsBuffer[K, V, C](
+class MapPartitionsWriter[K, V, C](
     shuffleId: Int,
     context: TaskContext,
     aggregator: Option[Aggregator[K, V, C]] = None,
@@ -88,7 +88,7 @@ class MapPartitionsBuffer[K, V, C](
 
   def insertAll(records: Iterator[Product2[K, V]]): Unit = {
     // TODO: stop combining if we find that the reduction factor isn't high
-    val start = System.nanoTime();
+//    val start = System.nanoTime();
     val shouldCombine = aggregator.isDefined
     if (shouldCombine) {
       // Combine values in-memory first using our AppendOnlyMap
@@ -145,39 +145,40 @@ class MapPartitionsBuffer[K, V, C](
     private val totalBufferInitial = conf.get(SHUFFLE_DAOS_WRITE_BUFFER_INITIAL_SIZE).toInt * 1024 * 1024
     private val forceWritePct = conf.get(SHUFFLE_DAOS_WRITE_BUFFER_FORCE_PCT)
     private val totalWriteValve = totalBufferThreshold * forceWritePct
+    private[daos] val sampleStat = new SampleStat
 
     if (log.isDebugEnabled()) {
       log.debug("partBufferThreshold: " + partBufferThreshold)
       log.debug("totalBufferThreshold: " + totalBufferThreshold)
-//      log.debug("totalBufferInitial: " + totalBufferInitial)
+      log.debug("totalBufferInitial: " + totalBufferInitial)
       log.debug("forceWritePct: " + forceWritePct)
       log.debug("totalWriteValve: " + totalWriteValve)
     }
 
-//    if (totalBufferInitial > totalBufferThreshold) {
-//      throw new IllegalArgumentException("total buffer initial size (" + totalBufferInitial + ") should be no less " +
-//        "than total buffer threshold (" + totalBufferThreshold + ").")
-//    }
+    if (totalBufferInitial > totalBufferThreshold) {
+      throw new IllegalArgumentException("total buffer initial size (" + totalBufferInitial + ") should be no more " +
+        "than total buffer threshold (" + totalBufferThreshold + ").")
+    }
 
     private var totalSize = 0L
-//    private var memoryLimit = totalBufferInitial * 1L
+    private var memoryLimit = totalBufferInitial * 1L
     private var largestSize = 0L
 
     var peakSize = 0L
 
-    private val partitionMapArray = new Array[SizeAwareMap[K, C]](numPartitions)
-    private val partitionBufferArray = new Array[SizeAwareBuffer[K, C]](numPartitions)
-
-    private def initialize[T >: Linked[K, C] with SizeAware[K, C]](): (T, T) = {
-      val mapHead = new SizeAwareMap[K, C](-1, partBufferThreshold,
-        totalBufferInitial, taskMemManager, this)
-      val mapEnd = new SizeAwareMap[K, C](-2, partBufferThreshold,
-        totalBufferInitial, taskMemManager, this)
-      val bufferHead = new SizeAwareBuffer[K, C](-1, partBufferThreshold,
-        totalBufferInitial, taskMemManager, this)
-      val bufferEnd = new SizeAwareBuffer[K, C](-2, partBufferThreshold,
-        totalBufferInitial, taskMemManager, this)
-      if (comparator.isDefined) {
+    private def initialize[T >: Linked[K, C] with SizeAware[K, C]]():
+      (T, T, Array[SizeAwareMap[K, C]], Array[SizeAwareBuffer[K, C]]) = {
+      // create virtual partition head and end, as well as all linked partitions
+      val (partitionMapArray, partitionBufferArray) = if (comparator.isDefined) {
+        (new Array[SizeAwareMap[K, C]](numPartitions), null)
+      } else {
+        (null, new Array[SizeAwareBuffer[K, C]](numPartitions))
+      }
+      val (head, end) = if (comparator.isDefined) {
+        val mapHead = new SizeAwareMap[K, C](-1, partBufferThreshold,
+          totalBufferInitial, taskMemManager, this)
+        val mapEnd = new SizeAwareMap[K, C](-2, partBufferThreshold,
+          totalBufferInitial, taskMemManager, this)
         (0 until numPartitions).foreach(i => {
           val map = new SizeAwareMap[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
           partitionMapArray(i) = map
@@ -187,7 +188,12 @@ class MapPartitionsBuffer[K, V, C](
             map.prev = prevMap
           }
         })
+        (mapHead, mapEnd)
       } else {
+        val bufferHead = new SizeAwareBuffer[K, C](-1, partBufferThreshold,
+          totalBufferInitial, taskMemManager, this)
+        val bufferEnd = new SizeAwareBuffer[K, C](-2, partBufferThreshold,
+          totalBufferInitial, taskMemManager, this)
         (0 until numPartitions).foreach(i => {
           val buffer = new SizeAwareBuffer[K, C](i, partBufferThreshold, totalBufferInitial, taskMemManager, this)
           partitionBufferArray(i) = buffer
@@ -197,8 +203,9 @@ class MapPartitionsBuffer[K, V, C](
             buffer.prev = prevBuffer
           }
         })
+        (bufferHead, bufferEnd)
       }
-      val (head, end) = if (comparator.isDefined) (mapHead, mapEnd) else (bufferHead, bufferEnd)
+      // link head and end
       val (first, last) = if (comparator.isDefined) (partitionMapArray(0), partitionMapArray(numPartitions - 1))
         else (partitionBufferArray(0), partitionBufferArray(numPartitions - 1))
       head.next = first
@@ -206,12 +213,12 @@ class MapPartitionsBuffer[K, V, C](
       end.prev = last
       last.next = end
 
-      (head, end)
+      (head, end, partitionMapArray, partitionBufferArray)
     }
 
-    val (head, end) = initialize()
+    val (head, end, partitionMapArray, partitionBufferArray) = initialize()
 
-    private def moveToFirst(head: Linked[K, C] with SizeAware[K, C], node: Linked[K, C] with SizeAware[K, C]): Unit = {
+    private def moveToFirst(node: Linked[K, C] with SizeAware[K, C]): Unit = {
       if (head.next != node) {
         // remove node from list
         node.prev.next = node.next
@@ -224,7 +231,7 @@ class MapPartitionsBuffer[K, V, C](
       }
     }
 
-    private def moveToLast(end: Linked[K, C] with SizeAware[K, C], node: Linked[K, C] with SizeAware[K, C]): Unit = {
+    private def moveToLast(node: Linked[K, C] with SizeAware[K, C]): Unit = {
       if (end.prev != node) {
         // remove node from list
         node.prev.next = node.next
@@ -240,21 +247,21 @@ class MapPartitionsBuffer[K, V, C](
     def changeValue(partitionId: Int, key: K, updateFunc: (Boolean, C) => C) = {
       val map = partitionMapArray(partitionId)
       val estSize = map.changeValue(key, updateFunc)
-//      afterUpdate(estSize, map)
+      afterUpdate(estSize, map)
     }
 
     def insert(partitionId: Int, key: K, value: C): Unit = {
       val buffer = partitionBufferArray(partitionId)
       val estSize = buffer.insert(key, value)
-//      afterUpdate(estSize, buffer)
+      afterUpdate(estSize, buffer)
     }
 
     def afterUpdate[T <: SizeAware[K, C] with Linked[K, C]](estSize: Long, buffer: T): Unit = {
       if (estSize > largestSize) {
         largestSize = estSize
-        moveToFirst(head, buffer)
+        moveToFirst(buffer)
       } else if (estSize == 0) {
-        moveToLast(end, buffer)
+        moveToLast(buffer)
       } else {
         // check if total buffer exceeds memory limit
         maybeWriteTotal()
@@ -265,18 +272,18 @@ class MapPartitionsBuffer[K, V, C](
       if (totalSize > totalWriteValve) {
         val buffer = head.next
         buffer.writeAndFlush
-        moveToLast(end, buffer)
+        moveToLast(buffer)
       }
-//      if (totalSize > memoryLimit) {
-//        val memRequest = 2 * totalSize - memoryLimit
-//        val granted = acquireMemory(memRequest)
-//        memoryLimit += granted
-//        if (totalSize >= memoryLimit) {
-//          val buffer = head.next
-//          buffer.writeAndFlush
-//          moveToLast(end, buffer)
-//        }
-//      }
+      if (totalSize > memoryLimit) {
+        val memRequest = 2 * totalSize - memoryLimit
+        val granted = acquireMemory(memRequest)
+        memoryLimit += granted
+        if (totalSize >= memoryLimit) {
+          val buffer = head.next
+          buffer.writeAndFlush
+          moveToLast(buffer)
+        }
+      }
     }
 
     def updateTotalSize(diff: Long): Unit = {
@@ -286,12 +293,12 @@ class MapPartitionsBuffer[K, V, C](
       }
     }
 
-//    def releaseMemory(memory: Long): Unit = {
-//      memoryLimit -= memory
-//    }
+    def releaseMemory(memory: Long): Unit = {
+      memoryLimit -= memory
+    }
 
     def flushAll: Unit = {
-      val start = System.nanoTime()
+//      val start = System.nanoTime()
       val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
       buffer.foreach(e => e.writeAndFlush)
       // logInfo(context.taskAttemptId() + " write/flush time: " + (System.nanoTime()-start)/1000000)
@@ -338,10 +345,10 @@ class MapPartitionsBuffer[K, V, C](
       }
     }
 
-//    def releaseMemory(memory: Long): Unit = {
-//      freeMemory(memory)
-//      parent.releaseMemory(memory)
-//    }
+    def releaseMemory(memory: Long): Unit = {
+      freeMemory(memory)
+      parent.releaseMemory(memory)
+    }
 
     private def writeAndFlush(memory: Long): Unit = {
       val writer = if (_pairsWriter != null) _pairsWriter else pairsWriter
@@ -355,7 +362,7 @@ class MapPartitionsBuffer[K, V, C](
         writeCount += count
         lastSize = 0
         parent.updateTotalSize(-memory)
-//        releaseMemory(memory - totalBufferInitial)
+        releaseMemory(memory - totalBufferInitial)
         reset
       }
     }
@@ -404,19 +411,18 @@ class MapPartitionsBuffer[K, V, C](
       taskMemoryManager: TaskMemoryManager,
       val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
-    private var map = new SizeTrackingAppendOnlyMap[K, C]
+    private var map = new SizeSamplerAppendOnlyMap[K, C](parent.sampleStat)
 
     def estimatedSize: Long = map.estimateSize()
 
     def changeValue(key: K, updateFunc: (Boolean, C) => C): Long = {
       map.changeValue(key, updateFunc)
-//      val estSize = map.estimateSize()
-//      afterUpdate(estSize)
-      0L
+      val estSize = map.estimateSize()
+      afterUpdate(estSize)
     }
 
     def reset: Unit = {
-      map = new SizeTrackingAppendOnlyMap[K, C]
+      map = new SizeSamplerAppendOnlyMap[K, C](parent.sampleStat)
     }
 
     def iterator(): Iterator[(K, C)] = {
@@ -445,7 +451,7 @@ class MapPartitionsBuffer[K, V, C](
     taskMemoryManager: TaskMemoryManager,
     val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
-    private var buffer = new PairBuffer[K, C] {
+    private var buffer = new SizeSamplerPairBuffer[K, C](parent.sampleStat) {
       override protected def afterUpdate(): Unit = {
 
       }
@@ -455,13 +461,12 @@ class MapPartitionsBuffer[K, V, C](
 
     def insert(key: K, value: C): Long = {
       buffer.insert(key, value)
-//      val estSize = buffer.estimateSize()
-//      afterUpdate(estSize)
-      0L
+      val estSize = buffer.estimateSize()
+      afterUpdate(estSize)
     }
 
     def reset: Unit = {
-      buffer = new PairBuffer[K, C]
+      buffer = new SizeSamplerPairBuffer[K, C](parent.sampleStat)
     }
 
     def iterator(): Iterator[(K, C)] = {

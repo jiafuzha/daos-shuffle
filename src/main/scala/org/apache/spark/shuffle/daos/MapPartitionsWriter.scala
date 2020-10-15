@@ -216,7 +216,7 @@ class MapPartitionsWriter[K, V, C](
       (head, end, partitionMapArray, partitionBufferArray)
     }
 
-    val (head, end, partitionMapArray, partitionBufferArray) = initialize()
+    private val (head, end, partitionMapArray, partitionBufferArray) = initialize()
 
     private def moveToFirst(node: Linked[K, C] with SizeAware[K, C]): Unit = {
       if (head.next != node) {
@@ -241,6 +241,8 @@ class MapPartitionsWriter[K, V, C](
         end.prev.next = node
         end.prev = node
         node.next = end
+        // set largestSize
+        largestSize = head.next.estimatedSize
       }
     }
 
@@ -268,20 +270,22 @@ class MapPartitionsWriter[K, V, C](
       }
     }
 
+    private def writeFirst: Unit = {
+      val buffer = head.next
+      buffer.writeAndFlush
+      moveToLast(buffer)
+    }
+
     private def maybeWriteTotal(): Unit = {
       if (totalSize > totalWriteValve) {
-        val buffer = head.next
-        buffer.writeAndFlush
-        moveToLast(buffer)
+        writeFirst
       }
       if (totalSize > memoryLimit) {
         val memRequest = 2 * totalSize - memoryLimit
         val granted = acquireMemory(memRequest)
         memoryLimit += granted
         if (totalSize >= memoryLimit) {
-          val buffer = head.next
-          buffer.writeAndFlush
-          moveToLast(buffer)
+          writeFirst
         }
       }
     }
@@ -413,16 +417,19 @@ class MapPartitionsWriter[K, V, C](
 
     private var map = new SizeSamplerAppendOnlyMap[K, C](parent.sampleStat)
 
-    def estimatedSize: Long = map.estimateSize()
+    private var _estSize: Long = _
+
+    def estimatedSize: Long = _estSize
 
     def changeValue(key: K, updateFunc: (Boolean, C) => C): Long = {
       map.changeValue(key, updateFunc)
-      val estSize = map.estimateSize()
-      afterUpdate(estSize)
+      _estSize = map.estimateSize()
+      afterUpdate(_estSize)
     }
 
     def reset: Unit = {
       map = new SizeSamplerAppendOnlyMap[K, C](parent.sampleStat)
+      _estSize = map.estimateSize()
     }
 
     def iterator(): Iterator[(K, C)] = {
@@ -430,9 +437,9 @@ class MapPartitionsWriter[K, V, C](
     }
 
     def spill(size: Long, trigger: MemoryConsumer): Long = {
-      val size = estimatedSize
+      val curSize = _estSize
       writeAndFlush
-      size
+      curSize
     }
 
     def pairsWriter: PartitionOutput = {
@@ -451,22 +458,21 @@ class MapPartitionsWriter[K, V, C](
     taskMemoryManager: TaskMemoryManager,
     val parent: PartitionsBuffer[K, C]) extends MemoryConsumer(taskMemoryManager) with Linked[K, C] with SizeAware[K, C] {
 
-    private var buffer = new SizeSamplerPairBuffer[K, C](parent.sampleStat) {
-      override protected def afterUpdate(): Unit = {
+    private var buffer = new SizeSamplerPairBuffer[K, C](parent.sampleStat)
 
-      }
-    }
+    private var _estSize: Long = _
 
-    def estimatedSize: Long = buffer.estimateSize()
+    def estimatedSize: Long = _estSize
 
     def insert(key: K, value: C): Long = {
       buffer.insert(key, value)
-      val estSize = buffer.estimateSize()
-      afterUpdate(estSize)
+      _estSize = buffer.estimateSize()
+      afterUpdate(_estSize)
     }
 
     def reset: Unit = {
       buffer = new SizeSamplerPairBuffer[K, C](parent.sampleStat)
+      _estSize = buffer.estimateSize()
     }
 
     def iterator(): Iterator[(K, C)] = {
@@ -474,9 +480,9 @@ class MapPartitionsWriter[K, V, C](
     }
 
     def spill(size: Long, trigger: MemoryConsumer): Long = {
-      val size = estimatedSize
+      val curSize = _estSize
       writeAndFlush
-      size
+      curSize
     }
 
     def pairsWriter: PartitionOutput = {

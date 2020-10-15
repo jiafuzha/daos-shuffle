@@ -26,6 +26,9 @@ class DaosShuffleWriterPerf extends SparkFunSuite with SharedSparkContext with M
   private val singleBufSize = conf.get(SHUFFLE_DAOS_WRITE_SINGLE_BUFFER_SIZE) * 1024 * 1024
   private val minSize = conf.get(SHUFFLE_DAOS_WRITE_MINIMUM_SIZE) * 1024
 
+  conf.set(SHUFFLE_DAOS_WRITE_PARTITION_BUFFER_SIZE, 100L)
+  conf.set(SHUFFLE_DAOS_WRITE_BUFFER_SIZE, 80L)
+
   override def beforeEach(): Unit = {
     super.beforeEach()
     MockitoAnnotations.initMocks(this)
@@ -67,10 +70,12 @@ class DaosShuffleWriterPerf extends SparkFunSuite with SharedSparkContext with M
     when(daosWriter.getPartitionLens(numMaps)).thenReturn(partitionLengths)
 
     val writer = new DaosShuffleWriter[Int, Array[Byte], Array[Byte]](shuffleHandle, shuffleId, context, shuffleIO)
+    val start = System.currentTimeMillis()
     writer.write(records.map(k => {
       val p = new Random(util.hashing.byteswap32(k._1)).nextInt(numMaps)
       (p, k._2)
     }).iterator)
+    println(s"time: ${System.currentTimeMillis() - start}")
     writer.stop(success = true)
     val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 //    assert(writeMetrics.bytesWritten === 6603076)

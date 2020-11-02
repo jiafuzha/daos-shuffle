@@ -117,10 +117,11 @@ public class DaosShuffleInputStream extends InputStream {
 
   @Override
   public int read() throws IOException {
-    while (true) {
+    while (!completed) {
       ByteBuf buf = source.nextBuf();
       if (buf == null) { // reach end
-        return complete();
+        complete();
+        return -1;
       }
       if (source.newMap) { // indication to close upper layer object inputstream
         return -1;
@@ -129,6 +130,7 @@ public class DaosShuffleInputStream extends InputStream {
         return buf.readByte();
       }
     }
+    return -1;
   }
 
   @Override
@@ -140,13 +142,16 @@ public class DaosShuffleInputStream extends InputStream {
   @Override
   public int read(byte[] bytes, int offset, int length) throws IOException {
     int len = length;
-    while (true) {
+    while (!completed) {
       ByteBuf buf = source.nextBuf();
       if (buf == null) { // reach end
-        return complete();
+        complete();
+        int r = length - len;
+        return r == 0 ? -1 : r;
       }
       if (source.newMap) { // indication to close upper layer object inputstream
-        return -1;
+        int r = length - len;
+        return r == 0 ? -1 : r;
       }
       if (len <= buf.readableBytes()) {
         buf.readBytes(bytes, offset, len);
@@ -157,6 +162,7 @@ public class DaosShuffleInputStream extends InputStream {
       offset += maxRead;
       len -= maxRead;
     }
+    return -1;
   }
 
   /**
@@ -166,11 +172,12 @@ public class DaosShuffleInputStream extends InputStream {
     source.newMap = false;
   }
 
-  private int complete() throws IOException {
-    source.checkPartitionSize();
-    source.checkTotalPartitions();
-    completed = true;
-    return -1;
+  private void complete() throws IOException {
+    if (!completed) {
+      source.checkPartitionSize();
+      source.checkTotalPartitions();
+      completed = true;
+    }
   }
 
   private void cleanup() {

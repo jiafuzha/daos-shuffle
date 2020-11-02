@@ -291,7 +291,7 @@ class MapPartitionsBuffer[K, V, C](
 //    }
 
     def flushAll: Unit = {
-      val start = System.nanoTime()
+//      val start = System.nanoTime()
       val buffer = if (comparator.isDefined) partitionMapArray else partitionBufferArray
       buffer.foreach(e => e.writeAndFlush)
       // logInfo(context.taskAttemptId() + " write/flush time: " + (System.nanoTime()-start)/1000000)

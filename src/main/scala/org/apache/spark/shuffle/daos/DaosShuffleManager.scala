@@ -167,6 +167,7 @@ class DaosShuffleManager(conf: SparkConf) extends ShuffleManager with Logging {
   }
 
   override def unregisterShuffle(shuffleId: Int) = {
+    log.info("unregistering shuffle: " + shuffleId)
     taskIdMapsForShuffle.remove(shuffleId)
     daosShuffleIO.removeShuffle(shuffleId)
   }

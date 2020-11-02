@@ -100,17 +100,23 @@ public class DaosWriter extends TaskSubmitter {
       LOG.debug("partition map size: " + partitionBufArray.length);
       for (int i = 0; i < numPartitions; i++) {
         NativeBuffer nb = partitionBufArray[i];
-        LOG.debug("id: " + i + ", native buffer: " + nb.partitionId + ", " +
+        if (nb != null) {
+          LOG.debug("id: " + i + ", native buffer: " + nb.partitionId + ", " +
             nb.totalSize + ", " + nb.roundSize);
+        }
       }
     }
     long[] lens = new long[numPartitions];
     for (int i = 0; i < numPartitions; i++) {
       NativeBuffer nb = partitionBufArray[i];
-      lens[i] = nb.totalSize;
-      if (nb.roundSize != 0 || !nb.bufList.isEmpty()) {
-        throw new IllegalStateException("round size should be 0, " + nb.roundSize + ", buflist should be empty, " +
+      if (nb != null) {
+        lens[i] = nb.totalSize;
+        if (nb.roundSize != 0 || !nb.bufList.isEmpty()) {
+          throw new IllegalStateException("round size should be 0, " + nb.roundSize + ", buflist should be empty, " +
             nb.bufList.size());
+        }
+      } else {
+        lens[i] = 0;
       }
     }
 //    debugLens = lens;

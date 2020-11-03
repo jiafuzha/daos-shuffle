@@ -24,6 +24,7 @@
 package org.apache.spark.shuffle.daos;
 
 import io.daos.BufferAllocator;
+import io.daos.DaosIOException;
 import io.daos.obj.DaosObject;
 import io.daos.obj.IODataDesc;
 import io.netty.buffershade5.ByteBuf;
@@ -273,7 +274,10 @@ public class DaosWriter extends TaskSubmitter {
   }
 
   @Override
-  protected boolean validateReturned(LinkedTaskContext context) {
+  protected boolean validateReturned(LinkedTaskContext context) throws IOException {
+    if (!context.desc.succeeded()) {
+      throw new DaosIOException("failed desc: " + context.desc);
+    }
     return false;
   }
 

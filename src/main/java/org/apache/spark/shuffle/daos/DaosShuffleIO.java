@@ -196,11 +196,11 @@ public class DaosShuffleIO {
         object.close();
         object = activeObject;
       }
-      // open just once in multiple threads
-      if (!object.isOpen()) {
-        synchronized (object) {
-          object.open();
-        }
+    }
+    // open just once in multiple threads
+    if (!object.isOpen()) {
+      synchronized (object) {
+        object.open();  // no reopening inside
       }
     }
     return object;
